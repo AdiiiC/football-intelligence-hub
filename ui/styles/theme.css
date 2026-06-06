@@ -1,0 +1,219 @@
+/* ============================================================
+   Football Intelligence Hub — Dark Luxury Theme
+   Deep navy base, gold #c9a84c accents, glassmorphism cards
+   ============================================================ */
+
+/* ── Root / Body ─────────────────────────────────────────── */
+:root {
+  --bg-primary:     #060f18;
+  --bg-secondary:   #0d1b2a;
+  --bg-card:        #111e2e;
+  --bg-card-hover:  #162436;
+  --border:         #1e3045;
+  --border-bright:  #2a4560;
+  --gold:           #c9a84c;
+  --gold-light:     #e8c97a;
+  --gold-dim:       #8a7030;
+  --text-primary:   #e8f0f8;
+  --text-secondary: #8899aa;
+  --text-muted:     #4a6070;
+  --green:          #3ddc84;
+  --red:            #ff5555;
+  --blue:           #4a9eff;
+}
+
+/* Streamlit main background */
+.stApp {
+  background-color: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Main content area */
+.main .block-container {
+  background-color: var(--bg-primary) !important;
+  padding-top: 1.5rem !important;
+  max-width: 1400px;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────── */
+[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, #070f1a 0%, #0a1724 100%) !important;
+  border-right: 1px solid var(--border) !important;
+}
+
+[data-testid="stSidebar"] .stMarkdown,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] .stSelectbox label {
+  color: var(--text-secondary) !important;
+}
+
+/* ── Headings ────────────────────────────────────────────── */
+h1 { color: var(--gold) !important; letter-spacing: 1px; }
+h2 { color: var(--text-primary) !important; }
+h3 { color: var(--gold-light) !important; }
+
+/* ── Selectbox / Input ───────────────────────────────────── */
+.stSelectbox > div > div,
+.stTextInput > div > div > input {
+  background-color: var(--bg-secondary) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text-primary) !important;
+  border-radius: 8px !important;
+}
+
+.stSelectbox > div > div:focus-within,
+.stTextInput > div > div > input:focus {
+  border-color: var(--gold) !important;
+  box-shadow: 0 0 0 2px rgba(201,168,76,.25) !important;
+}
+
+/* Dropdown options */
+[data-baseweb="popover"] li {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+}
+[data-baseweb="popover"] li:hover {
+  background: var(--bg-card-hover) !important;
+}
+
+/* ── Buttons ─────────────────────────────────────────────── */
+.stButton > button {
+  background: linear-gradient(135deg, #1a2d40, #0d1b2a) !important;
+  color: var(--gold) !important;
+  border: 1px solid var(--gold-dim) !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  letter-spacing: .5px !important;
+  transition: all .2s !important;
+}
+.stButton > button:hover {
+  background: linear-gradient(135deg, #2a4560, #1a3050) !important;
+  border-color: var(--gold) !important;
+  box-shadow: 0 4px 15px rgba(201,168,76,.25) !important;
+}
+
+/* ── Metrics ─────────────────────────────────────────────── */
+[data-testid="stMetricValue"] {
+  color: var(--gold-light) !important;
+  font-size: 1.8rem !important;
+}
+[data-testid="stMetricLabel"] {
+  color: var(--text-secondary) !important;
+}
+[data-testid="stMetricDelta"] { font-size: .85rem !important; }
+
+/* ── Dataframe ───────────────────────────────────────────── */
+[data-testid="stDataFrame"] {
+  border: 1px solid var(--border) !important;
+  border-radius: 10px !important;
+  overflow: hidden;
+}
+.dvn-scroller { background: var(--bg-secondary) !important; }
+
+/* ── Expander ────────────────────────────────────────────── */
+[data-testid="stExpander"] {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 10px !important;
+}
+[data-testid="stExpander"] summary {
+  color: var(--text-primary) !important;
+}
+
+/* ── Tabs ────────────────────────────────────────────────── */
+[data-testid="stTabs"] [data-baseweb="tab-list"] {
+  background: var(--bg-secondary) !important;
+  border-radius: 8px !important;
+  border: 1px solid var(--border) !important;
+  gap: 2px !important;
+  padding: 3px !important;
+}
+[data-testid="stTabs"] [data-baseweb="tab"] {
+  color: var(--text-secondary) !important;
+  border-radius: 6px !important;
+  transition: all .15s;
+}
+[data-testid="stTabs"] [aria-selected="true"] {
+  background: var(--bg-card-hover) !important;
+  color: var(--gold) !important;
+  border-bottom: 2px solid var(--gold) !important;
+}
+
+/* ── Progress / Spinner ──────────────────────────────────── */
+.stProgress > div > div > div {
+  background: linear-gradient(90deg, var(--gold-dim), var(--gold)) !important;
+  border-radius: 99px !important;
+}
+
+/* ── Divider ─────────────────────────────────────────────── */
+hr { border-color: var(--border) !important; }
+
+/* ── Radio ───────────────────────────────────────────────── */
+.stRadio label { color: var(--text-secondary) !important; }
+.stRadio [data-testid="stMarkdownContainer"] p { color: var(--text-secondary) !important; }
+
+/* ── Slider ──────────────────────────────────────────────── */
+.stSlider [data-baseweb="slider"] div[role="slider"] {
+  background: var(--gold) !important;
+}
+.stSlider [data-testid="stTickBarMin"],
+.stSlider [data-testid="stTickBarMax"] {
+  color: var(--text-muted) !important;
+}
+
+/* ── Plotly charts: transparent background ───────────────── */
+.js-plotly-plot .plotly .bg { fill: transparent !important; }
+.js-plotly-plot .plotly { background: transparent !important; }
+
+/* ── FIFA Card overrides ─────────────────────────────────── */
+.fifa-card-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: flex-start;
+}
+
+/* ── Formation tooltip ───────────────────────────────────── */
+.formation-tooltip {
+  background: var(--bg-card);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: .82rem;
+  color: var(--text-primary);
+  box-shadow: 0 8px 24px rgba(0,0,0,.6);
+}
+
+/* ── Transfer card badges ────────────────────────────────── */
+.badge-confirmed {
+  background: rgba(61,220,132,.15);
+  color: var(--green);
+  border: 1px solid rgba(61,220,132,.3);
+  border-radius: 20px;
+  padding: 2px 10px;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .5px;
+}
+.badge-rumour {
+  background: rgba(201,168,76,.12);
+  color: var(--gold);
+  border: 1px solid rgba(201,168,76,.3);
+  border-radius: 20px;
+  padding: 2px 10px;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .5px;
+}
+
+/* ── Notification / Info boxes ───────────────────────────── */
+.stInfo { background: rgba(74,158,255,.1) !important; border-left-color: var(--blue) !important; }
+.stWarning { background: rgba(255,165,0,.1) !important; }
+.stSuccess { background: rgba(61,220,132,.1) !important; }
+.stError { background: rgba(255,85,85,.1) !important; }
+
+/* ── Scrollbar ───────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-secondary); }
+::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--gold-dim); }

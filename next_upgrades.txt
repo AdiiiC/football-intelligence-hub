@@ -1,0 +1,7 @@
+1. include South American Leagues and their own internal competitions so that for transfer recommendations even they can show up for many clubs.
+2. transfer recommendations must be based on this fact:
+    a. if t>=2 years, compare relevant (as per player position) previous and current szn stats vs others in top 6 of league and UCL.. Find players which are of the same profile and beating that player in the weak spots and systemic fit overall.
+    b. if t=1 yr, current year stat and give time if systemic fit can be achieved else wait for another half szn.
+3. Detailed Analysis must give the stats where the player outperforms and can contribute in fixing issues and overall systemic fit.
+4. Try to find in detail GK and Defender Stats.
+5. Based on completed transfer, give verdict as to whether its overpaid, underpaid or fairly paid as per prediction model considering all relevant factors and what the player can contribute to the team.
