@@ -164,9 +164,9 @@ def _build_image_html(player: dict, size: str = "80px") -> str:
     The <img> sits on top; onerror hides it, revealing the initials.
     """
     url = (
-        player.get("ea_avatar_url") or
-        player.get("sofifa_face_url") or
-        player.get("photo_url") or
+        player.get("sofifa_face_url") or   # ← 200 OK, use first
+        player.get("ea_avatar_url") or     # ← EA CDN 403s in most envs
+        player.get("photo_url") or         # ← TM photo fallback
         ""
     )
     name = player.get("name", "?")
