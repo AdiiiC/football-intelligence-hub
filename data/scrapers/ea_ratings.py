@@ -257,27 +257,112 @@ def get_all_players(force_refresh: bool = False) -> list[dict]:
     return fetch_all_players()
 
 
+def search_player_ea_live(name: str) -> Optional[dict]:
+    """
+    Search EA ratings page by player name via the ?player_name= filter.
+    Used as a fallback when a player is not in any cached club list.
+    Results cached per player for 48h.
+    """
+    import unicodedata as _ud
+    _norm = lambda s: _ud.normalize("NFKD", s).encode("ascii", "ignore").decode().lower().strip()
+
+    cache_key = f"ea_name_search_{_norm(name).replace(' ', '_')}"
+    player_cache = Path(CACHE_DIR) / f"{cache_key}.json"
+    if player_cache.exists():
+        age = time.time() - player_cache.stat().st_mtime
+        if age < CACHE_TTL_SQUAD * 2:  # 48h
+            with open(player_cache) as f:
+                return json.load(f)
+
+    name_query = name.strip().replace(" ", "%20")
+    url = f"{EA_RATINGS_URL}?search={name_query}"
+    try:
+        SESSION.headers.update({
+            "User-Agent": SCRAPER_HEADERS["User-Agent"],
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        })
+        resp = SESSION.get(url, timeout=20)
+        if resp.status_code != 200:
+            return None
+        m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', resp.text, re.DOTALL)
+        if not m:
+            return None
+        data = json.loads(m.group(1))
+        raw_items = data["props"]["pageProps"]["ratingDetails"]["items"]
+        players = [_parse_player(p) for p in raw_items]
+        if not players:
+            return None
+
+        name_norm = _norm(name)
+        name_tokens = name_norm.split()
+
+        # Score each result: exact name > containment > token overlap
+        best = None
+        best_score = -1
+        for p in players:
+            p_norm = _norm(p.get("name", ""))
+            if p_norm == name_norm:
+                best, best_score = p, 200
+                break
+            p_tokens = p_norm.split()
+            shared = set(name_tokens) & set(p_tokens)
+            score = 0
+            if name_norm in p_norm or p_norm in name_norm:
+                score = 100 + len(shared)
+            elif shared:
+                score = len(shared) * 20
+            if score > best_score:
+                best, best_score = p, score
+
+        if best and best_score > 0:
+            Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
+            with open(player_cache, "w") as f:
+                json.dump(best, f)
+            return best
+    except Exception:
+        pass
+    return None
+
+
 def search_player_ea(name: str, club: str = "") -> Optional[dict]:
     """
     Search for a player in the EA dataset by name.
-    Loads from cache. Falls back to fetching page 1 only if cache is cold.
+    1. Tries local club caches first (fast, no network)
+    2. Falls back to ea_all_players.json
+    3. Falls back to live EA name search (?player_name=)
     """
-    players = load_cached_players()
-    if not players:
-        players, _ = fetch_page(1)
-
-    name_lower = name.lower()
+    # 1. Try all club caches first
+    import unicodedata as _ud
+    _norm = lambda s: _ud.normalize("NFKD", s).encode("ascii", "ignore").decode().lower().strip()
+    name_lower = _norm(name)
     last = name_lower.split()[-1]
 
-    candidates = [p for p in players if last in p.get("name", "").lower()]
-    if club:
-        club_filtered = [p for p in candidates if club.lower().split()[0] in p.get("club_name", "").lower()]
-        if club_filtered:
-            candidates = club_filtered
+    for club_cache in Path(CACHE_DIR).glob("ea_club_*.json"):
+        try:
+            players = json.load(open(club_cache))
+            candidates = [p for p in players if last in _norm(p.get("name", ""))]
+            if candidates:
+                if club:
+                    c_filt = [p for p in candidates if club.lower().split()[0] in (p.get("club_name") or "").lower()]
+                    if c_filt:
+                        return max(c_filt, key=lambda p: p.get("overall", 0))
+                return max(candidates, key=lambda p: p.get("overall", 0))
+        except Exception:
+            continue
 
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.get("overall", 0))
+    # 2. Try flat cache
+    players = load_cached_players()
+    if players:
+        candidates = [p for p in players if last in _norm(p.get("name", ""))]
+        if candidates:
+            if club:
+                c_filt = [p for p in candidates if club.lower().split()[0] in (p.get("club_name") or "").lower()]
+                if c_filt:
+                    return max(c_filt, key=lambda p: p.get("overall", 0))
+            return max(candidates, key=lambda p: p.get("overall", 0))
+
+    # 3. Live search on EA website
+    return search_player_ea_live(name)
 
 
 def get_club_players_ea(club_name: str) -> list[dict]:
@@ -444,3 +529,40 @@ def fetch_club_players_live(tm_club_name: str) -> list[dict]:
         return players
     except Exception:
         return get_club_players_ea(tm_club_name)
+
+
+def fetch_player_ea_for_squad(tm_players: list, club_ea_players: list) -> list[dict]:
+    """
+    Given a TM squad and that club's EA player list, return an augmented EA list
+    that fills in any missing players via live name-search.
+
+    For each TM player not already in the EA club list, we attempt a live
+    ?player_name= lookup on the EA ratings page and attach the result.
+    This fixes the case where loan players / late arrivals aren't in the
+    club's EA team roster.
+
+    Returns the augmented EA list (original + filled-in entries).
+    """
+    import unicodedata as _ud
+    _norm = lambda s: _ud.normalize("NFKD", s).encode("ascii", "ignore").decode().lower().strip()
+
+    ea_names = {_norm(p.get("name", "")) for p in club_ea_players}
+    augmented = list(club_ea_players)
+
+    for tm_p in tm_players:
+        tm_name = tm_p.get("name", "")
+        if not tm_name:
+            continue
+        nm = _norm(tm_name)
+        last = nm.split()[-1] if nm else ""
+        # Already matched if any ea name shares the last token
+        already_covered = any(last in en for en in ea_names)
+        if already_covered:
+            continue
+        # Try live search
+        result = search_player_ea_live(tm_name)
+        if result:
+            augmented.append(result)
+            ea_names.add(_norm(result.get("name", "")))
+
+    return augmented

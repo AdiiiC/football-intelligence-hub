@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from data.scrapers import transfermarkt as tm
-from data.scrapers.ea_ratings import fetch_club_players_live
+from data.scrapers.ea_ratings import fetch_club_players_live, fetch_player_ea_for_squad
 from config.settings import POSITION_GROUPS, CACHE_DIR, CACHE_TTL_SQUAD, TOP_5_LEAGUES
 import time
 
@@ -77,6 +77,10 @@ def get_enriched_squad(club_slug: str, club_id: str, league_name: str) -> list[d
 
     # 2. Fetch all EA players for this club via the ?team= filter (fast, ~1 request)
     ea_players = fetch_club_players_live(club_slug.replace("-", " "))
+
+    # Fill in any TM players not found in the club EA list via live name search
+    # (handles loan players, late arrivals, kit number changes, etc.)
+    ea_players = fetch_player_ea_for_squad(squad, ea_players)
 
     # 3. Fetch Understat league stats (single POST, returns xG/xA/goals per player)
     understat_stats = {}
