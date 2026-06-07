@@ -134,8 +134,10 @@ def _parse_player(raw: dict) -> dict:
         "gk_positioning":     _stat("gkPositioning"),
         "gk_reflexes":        _stat("gkReflexes"),
         # ─── Image URLs ───
-        "ea_avatar_url":    avatar_url,   # official EA portrait (best quality)
-        "ea_shield_url":    shield_url,   # EA card shield
+        # EA CDN: page still returns FC25 bucket paths — rewrite to FC26 bucket.
+        # If FC26 path returns 403/404, the UI falls back to sofifa/futbin CDN.
+        "ea_avatar_url":    _upgrade_cdn_url(avatar_url),
+        "ea_shield_url":    _upgrade_cdn_url(shield_url),
         # Also build CDN URLs using ea_id for card faces
         "sofifa_face_url":  _sofifa_url(raw.get("id")),
         "futbin_face_url":  _futbin_url(raw.get("id")),
@@ -155,6 +157,13 @@ def _age_from_dob(dob_str: str) -> Optional[int]:
         return None
 
 
+def _upgrade_cdn_url(url: str) -> str:
+    """Rewrite EA CDN image URLs from FC25 bucket → FC26 bucket."""
+    if not url:
+        return url
+    return url.replace("/FC25/", "/FC26/")
+
+
 def _sofifa_url(sofifa_id) -> str:
     if not sofifa_id:
         return ""
@@ -165,7 +174,7 @@ def _sofifa_url(sofifa_id) -> str:
 def _futbin_url(sofifa_id) -> str:
     if not sofifa_id:
         return ""
-    return f"https://cdn.futbin.com/content/fifa25/img/players/{int(sofifa_id)}.png"
+    return f"https://cdn.futbin.com/content/fc26/img/players/{int(sofifa_id)}.png"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
