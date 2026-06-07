@@ -11,27 +11,41 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import random
+
 import cloudscraper
 from bs4 import BeautifulSoup
 
-from config.settings import SCRAPER_HEADERS, CACHE_DIR, CACHE_TTL_SQUAD, CACHE_TTL_TRANSFERS
+from config.settings import get_scraper_headers, CACHE_DIR, CACHE_TTL_SQUAD, CACHE_TTL_TRANSFERS
 
 BASE_URL = "https://www.transfermarkt.com"
 
 scraper = cloudscraper.create_scraper(
     browser={"browser": "chrome", "platform": "windows", "mobile": False}
 )
-scraper.headers.update(SCRAPER_HEADERS)
+scraper.headers.update(get_scraper_headers())
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _cache_path(key: str) -> Path:
+def _cache_dir() -> Path:
+    """Return a writable cache directory, falling back to /tmp."""
     p = Path(CACHE_DIR)
-    p.mkdir(parents=True, exist_ok=True)
-    return p / f"{key}.json"
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        (p / ".write_test").touch()
+        (p / ".write_test").unlink(missing_ok=True)
+        return p
+    except OSError:
+        return Path("/tmp/football_cache")
+
+
+def _cache_path(key: str) -> Path:
+    d = _cache_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{key}.json"
 
 
 def _load_cache(key: str, ttl: int) -> Optional[dict]:
@@ -50,15 +64,19 @@ def _save_cache(key: str, data) -> None:
         json.dump(data, f)
 
 
-def _get(url: str, retries: int = 3) -> Optional[BeautifulSoup]:
+def _get(url: str, retries: int = 4) -> Optional[BeautifulSoup]:
     for attempt in range(retries):
         try:
-            resp = scraper.get(url, timeout=15)
+            scraper.headers.update(get_scraper_headers())
+            resp = scraper.get(url, timeout=20)
             if resp.status_code == 200:
                 return BeautifulSoup(resp.text, "html.parser")
-            time.sleep(2 ** attempt)
+            if resp.status_code == 429:
+                time.sleep(30 + random.uniform(0, 10))
+                continue
+            time.sleep(2 ** attempt + random.uniform(0, 2))
         except Exception:
-            time.sleep(2 ** attempt)
+            time.sleep(2 ** attempt + random.uniform(0, 2))
     return None
 
 

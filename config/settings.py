@@ -4,15 +4,26 @@ Single source of truth for all IDs, TTLs, paths, and constants.
 """
 
 import os
+import random
 from pathlib import Path
 
-# Load .env if present (optional — app works without it)
+# Load .env if present (local dev — optional)
 _ENV = Path(__file__).parent.parent / ".env"
 if _ENV.exists():
     for line in _ENV.read_text().splitlines():
         if line.strip() and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
+
+# Load Streamlit secrets if running on Streamlit Cloud
+try:
+    import streamlit as st
+    _secrets = dict(st.secrets)
+    for _k, _v in _secrets.items():
+        if isinstance(_v, str):
+            os.environ.setdefault(_k, _v)
+except Exception:
+    pass
 
 # ---------------------------------------------------------------------------
 # League & Club Configuration — single source of truth for all IDs
@@ -61,18 +72,37 @@ CURRENT_SEASON_UNDERSTAT  = os.environ.get("CURRENT_SEASON_UNDERSTAT", "2025")
 CURRENT_SEASON_TM         = os.environ.get("CURRENT_SEASON_TM", "2024")
 
 # ---------------------------------------------------------------------------
-# HTTP Headers
+# HTTP Headers — rotating User-Agents to reduce cloud IP blocking
 # ---------------------------------------------------------------------------
-SCRAPER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/125.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Referer": "https://www.google.com/",
-}
+_USER_AGENTS = [
+    # Chrome on macOS
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    # Chrome on Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    # Firefox on Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    # Safari on macOS
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+    # Chrome on Linux (common cloud UA — keep one to avoid looking suspicious)
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    # Edge on Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+]
+
+def get_scraper_headers() -> dict:
+    """Return headers with a randomly chosen User-Agent."""
+    return {
+        "User-Agent": random.choice(_USER_AGENTS),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Referer": "https://www.google.com/",
+        "DNT": "1",
+    }
+
+# Static headers for backward-compat (scrapers that don't call get_scraper_headers)
+SCRAPER_HEADERS = get_scraper_headers()
 
 # ---------------------------------------------------------------------------
 # Cache TTLs (seconds)

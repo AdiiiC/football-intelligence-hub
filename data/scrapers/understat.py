@@ -9,23 +9,37 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import random
+
 import requests
 
-from config.settings import SCRAPER_HEADERS, CACHE_DIR, CACHE_TTL_STATS
+from config.settings import get_scraper_headers, CACHE_DIR, CACHE_TTL_STATS
 
 BASE_URL = "https://understat.com"
 SESSION = requests.Session()
-SESSION.headers.update(SCRAPER_HEADERS)
+SESSION.headers.update(get_scraper_headers())
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _cache_path(key: str) -> Path:
+def _cache_dir() -> Path:
+    """Return a writable cache directory, falling back to /tmp."""
     p = Path(CACHE_DIR)
-    p.mkdir(parents=True, exist_ok=True)
-    return p / f"{key}.json"
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        (p / ".write_test").touch()
+        (p / ".write_test").unlink(missing_ok=True)
+        return p
+    except OSError:
+        return Path("/tmp/football_cache")
+
+
+def _cache_path(key: str) -> Path:
+    d = _cache_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{key}.json"
 
 
 def _load_cache(key: str, ttl: int) -> Optional[dict]:
@@ -57,13 +71,19 @@ def _extract_json_var(html: str, var_name: str) -> Optional[dict]:
         return None
 
 
-def _get_page(url: str) -> Optional[str]:
-    try:
-        resp = SESSION.get(url, timeout=15)
-        if resp.status_code == 200:
-            return resp.text
-    except Exception:
-        pass
+def _get_page(url: str, retries: int = 3) -> Optional[str]:
+    for attempt in range(retries):
+        try:
+            SESSION.headers.update(get_scraper_headers())
+            resp = SESSION.get(url, timeout=20)
+            if resp.status_code == 200:
+                return resp.text
+            if resp.status_code == 429:
+                time.sleep(30 + random.uniform(0, 10))
+                continue
+            time.sleep(2 ** attempt + random.uniform(0, 2))
+        except Exception:
+            time.sleep(2 ** attempt + random.uniform(0, 2))
     return None
 
 

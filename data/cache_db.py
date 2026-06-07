@@ -12,7 +12,20 @@ from typing import Optional, Any
 
 from config.settings import CACHE_DIR
 
-_DB_PATH = Path(CACHE_DIR) / "football_cache.db"
+def _resolve_db_path() -> Path:
+    """Return a writable DB path — falls back to /tmp on read-only filesystems."""
+    preferred = Path(CACHE_DIR) / "football_cache.db"
+    try:
+        preferred.parent.mkdir(parents=True, exist_ok=True)
+        # Quick write test
+        preferred.parent.joinpath(".write_test").touch()
+        preferred.parent.joinpath(".write_test").unlink(missing_ok=True)
+        return preferred
+    except OSError:
+        fallback = Path("/tmp/football_cache.db")
+        return fallback
+
+_DB_PATH = _resolve_db_path()
 
 
 def _conn() -> sqlite3.Connection:

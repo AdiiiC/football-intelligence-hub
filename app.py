@@ -65,16 +65,17 @@ with st.sidebar:
     @st.cache_data(ttl=300, show_spinner=False)
     def _check_sources():
         import requests as _req
+        from config.settings import get_scraper_headers
         results = {}
         checks = {
-            "Transfermarkt": ("https://www.transfermarkt.com", "GET", None),
-            "Understat":     ("https://understat.com", "GET", None),
-            "FBref":         ("https://fbref.com", "GET", None),
-            "EA FC":         ("https://www.ea.com/en-gb/games/ea-sports-fc", "GET", None),
+            "Transfermarkt": "https://www.transfermarkt.com",
+            "Understat":     "https://understat.com",
+            "FBref":         "https://fbref.com",
+            "EA FC":         "https://www.ea.com/en-gb/games/ea-sports-fc",
         }
-        for name, (url, method, data) in checks.items():
+        for name, url in checks.items():
             try:
-                r = _req.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+                r = _req.get(url, timeout=8, headers=get_scraper_headers())
                 results[name] = r.status_code == 200
             except Exception:
                 results[name] = False
@@ -82,6 +83,7 @@ with st.sidebar:
 
     with st.expander("🔌 Data Sources", expanded=False):
         health = _check_sources()
+        blocked = [src for src, ok in health.items() if not ok]
         for src, ok in health.items():
             icon = "🟢" if ok else "🔴"
             st.markdown(f"{icon} **{src}**", unsafe_allow_html=False)
@@ -91,6 +93,27 @@ with st.sidebar:
         if st.button("🗑 Clear expired cache", key="clear_cache"):
             n = cache_cleanup_expired()
             st.success(f"Removed {n} expired entries")
+
+# ── Cloud IP warning banner ──────────────────────────────────────────────────
+# Show once if any source is unreachable (common on Streamlit Community Cloud)
+@st.cache_data(ttl=300, show_spinner=False)
+def _any_blocked():
+    import requests as _req
+    from config.settings import get_scraper_headers
+    try:
+        r = _req.get("https://www.transfermarkt.com", timeout=8, headers=get_scraper_headers())
+        return r.status_code != 200
+    except Exception:
+        return True
+
+if _any_blocked():
+    st.warning(
+        "⚠️ **One or more data sources are unreachable from this server.** "
+        "Cached data will be shown where available. "
+        "If you're on Streamlit Community Cloud, some live scraping may be blocked by the source sites. "
+        "Data that was cached before deployment will still display correctly.",
+        icon="⚠️",
+    )
 
 # ── Home page content ────────────────────────────────────────────────────────
 st.markdown(

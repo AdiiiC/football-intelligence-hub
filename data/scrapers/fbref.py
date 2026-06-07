@@ -9,11 +9,13 @@ import re
 from pathlib import Path
 from typing import Optional
 
+import random
+
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 
-from config.settings import SCRAPER_HEADERS, CACHE_DIR, CACHE_TTL_STATS, FBREF_STAT_COLS
+from config.settings import get_scraper_headers, CACHE_DIR, CACHE_TTL_STATS, FBREF_STAT_COLS
 
 BASE_URL = "https://fbref.com"
 
@@ -27,17 +29,29 @@ STAT_PAGES = {
 }
 
 SESSION = requests.Session()
-SESSION.headers.update(SCRAPER_HEADERS)
+SESSION.headers.update(get_scraper_headers())
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _cache_path(key: str) -> Path:
+def _cache_dir() -> Path:
+    """Return a writable cache directory, falling back to /tmp."""
     p = Path(CACHE_DIR)
-    p.mkdir(parents=True, exist_ok=True)
-    return p / f"{key}.json"
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        (p / ".write_test").touch()
+        (p / ".write_test").unlink(missing_ok=True)
+        return p
+    except OSError:
+        return Path("/tmp/football_cache")
+
+
+def _cache_path(key: str) -> Path:
+    d = _cache_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{key}.json"
 
 
 def _load_cache(key: str, ttl: int) -> Optional[list]:
@@ -56,17 +70,19 @@ def _save_cache(key: str, data) -> None:
         json.dump(data, f)
 
 
-def _get_html(url: str, retries: int = 3) -> Optional[BeautifulSoup]:
+def _get_html(url: str, retries: int = 4) -> Optional[BeautifulSoup]:
     for attempt in range(retries):
         try:
-            resp = SESSION.get(url, timeout=20)
+            SESSION.headers.update(get_scraper_headers())
+            resp = SESSION.get(url, timeout=25)
             if resp.status_code == 200:
                 return BeautifulSoup(resp.text, "html.parser")
             if resp.status_code == 429:
-                time.sleep(30)
-            time.sleep(3 + attempt * 2)
+                time.sleep(60 + random.uniform(0, 20))
+                continue
+            time.sleep(4 + attempt * 3 + random.uniform(0, 3))
         except Exception:
-            time.sleep(5)
+            time.sleep(5 + random.uniform(0, 3))
     return None
 
 
