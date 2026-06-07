@@ -64,11 +64,11 @@ with st.sidebar:
         club = next(c for c in clubs if c["name"] == club_name)
 
         @st.cache_data(ttl=86400, show_spinner=False)
-        def load_squad(slug, tid, ln):
-            return get_enriched_squad(slug, tid, ln, club_display_name=club_name)
+        def load_squad(slug, tid, ln, club_dn=""):
+            return get_enriched_squad(slug, tid, ln, club_display_name=club_dn)
 
         with st.spinner(f"Loading {club_name}…"):
-            squad = load_squad(club["tm_slug"], club["tm_id"], league)
+            squad = load_squad(club["tm_slug"], club["tm_id"], league, club_dn=club_name)
 
         player_names = [p.get("name", "") for p in squad]
         selected_name = st.selectbox("Player", player_names)
@@ -493,10 +493,10 @@ with tab_fit:
         with st.spinner(f"Loading {target_club_name} squad…"):
 
             @st.cache_data(ttl=86400, show_spinner=False)
-            def load_target_squad(slug, tid, ln):
-                return get_enriched_squad(slug, tid, ln, club_display_name=target_club_name)
+            def load_target_squad(slug, tid, ln, club_dn=""):
+                return get_enriched_squad(slug, tid, ln, club_display_name=club_dn)
 
-            target_squad = load_target_squad(target_club["tm_slug"], target_club["tm_id"], target_league)
+            target_squad = load_target_squad(target_club["tm_slug"], target_club["tm_id"], target_league, club_dn=target_club_name)
 
         if target_squad:
             try:

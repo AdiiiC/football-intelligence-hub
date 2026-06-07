@@ -202,11 +202,11 @@ with st.sidebar:
     formation = st.selectbox("Formation", list(FORMATIONS.keys()), index=0, key="fm_form")
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _squad(slug, tid, ln):
-    return get_enriched_squad(slug, tid, ln, club_display_name=club_name)
+def _squad(slug, tid, ln, club_dn=""):
+    return get_enriched_squad(slug, tid, ln, club_display_name=club_dn)
 
 with st.spinner(f"Loading {club_name}…"):
-    squad = _squad(club["tm_slug"], club["tm_id"], league)
+    squad = _squad(club["tm_slug"], club["tm_id"], league, club_dn=club_name)
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 st.markdown(f"## 🏟️ {club_name} — {formation}")

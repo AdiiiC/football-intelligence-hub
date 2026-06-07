@@ -41,8 +41,8 @@ with st.sidebar:
 
 # ── Load squad ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=86400, show_spinner=False)
-def load_squad(slug, tid, ln):
-    return get_enriched_squad(slug, tid, ln, club_display_name=club_name)
+def load_squad(slug, tid, ln, club_dn=""):
+    return get_enriched_squad(slug, tid, ln, club_display_name=club_dn)
 
 
 @st.cache_data(ttl=86400 * 2, show_spinner=False)
@@ -182,7 +182,7 @@ def load_candidate_pool(ln: str, squad_names: tuple, budget_m: float, max_age_va
 
 
 with st.spinner(f"Analysing {club_name}…"):
-    squad = load_squad(club["tm_slug"], club["tm_id"], league)
+    squad = load_squad(club["tm_slug"], club["tm_id"], league, club_dn=club_name)
 
 if not squad:
     st.warning("Could not load squad data.")
