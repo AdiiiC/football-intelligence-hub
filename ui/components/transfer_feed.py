@@ -6,6 +6,88 @@ import streamlit as st
 import streamlit.components.v1 as _stcomp
 from datetime import datetime
 
+# ── Confidence scoring ───────────────────────────────────────────────────────
+# Tier 1 = almost always accurate, Tier 3 = speculative
+_SOURCE_TIERS = {
+    # Tier 1 — elite reliability
+    "fabrizio romano": 1,
+    "sky sports": 1,
+    "the athletic": 1,
+    "bbc sport": 1,
+    "transfermarkt": 1,
+    "l'equipe": 1,
+    "marca": 1,
+    "as": 1,
+    "gazzetta dello sport": 1,
+    "kicker": 1,
+    "david ornstein": 1,
+    "gianluca di marzio": 1,
+    # Tier 2 — generally reliable
+    "goal.com": 2,
+    "sky italia": 2,
+    "sport1": 2,
+    "daily mail": 2,
+    "guardian": 2,
+    "telegraph": 2,
+    "football italia": 2,
+    "sport": 2,
+    "mundo deportivo": 2,
+    "calciomercato": 2,
+    "tuttosport": 2,
+    "sky germany": 2,
+    "bild": 2,
+    "record": 2,
+    "a bola": 2,
+    # Tier 3 — speculative/tabloid
+    "the sun": 3,
+    "daily star": 3,
+    "mirror": 3,
+    "express": 3,
+    "talksport": 3,
+    "football insider": 3,
+    "givemesport": 3,
+    "90min": 3,
+    "fichajes": 3,
+}
+
+_TIER_LABELS = {
+    1: ("High",   "#3ddc84", "#1a4a2a"),
+    2: ("Medium", "#f0b429", "#3a3a00"),
+    3: ("Low",    "#e74c3c", "#4a1a1a"),
+}
+
+
+def get_rumour_confidence(item: dict) -> dict:
+    """
+    Score a rumour's reliability 0-100 based on:
+    - Source tier (50 pts max)
+    - Confirmed/rumour type (30 pts)
+    - Has fee info (10 pts)
+    - Recent date (10 pts)
+    Returns {score, label, color, bg, tier}
+    """
+    # Already confirmed → 100
+    if item.get("type") == "confirmed":
+        return {"score": 100, "label": "Confirmed", "color": "#3ddc84", "bg": "#1a4a2a", "tier": 0}
+
+    source = (item.get("source") or "").lower()
+    tier = 3  # default worst
+    for keyword, t in _SOURCE_TIERS.items():
+        if keyword in source:
+            tier = min(tier, t)
+
+    score = 0
+    score += {1: 50, 2: 30, 3: 10}.get(tier, 10)   # source weight
+    score += 20 if item.get("type") == "confirmed" else 0
+    score += 10 if item.get("fee_m") else 0
+    score += 10 if item.get("date") else 0
+
+    # Clamp
+    score = max(0, min(score, 100))
+
+    label, color, bg = _TIER_LABELS.get(tier, ("Low", "#e74c3c", "#4a1a1a"))
+    return {"score": score, "label": label, "color": color, "bg": bg, "tier": tier}
+
 
 def _render_cards_iframe(items: list, height_per_item: int = 85) -> None:
     """Render a list of transfer cards in a components.v1.html iframe (bypasses CSP)."""
@@ -27,6 +109,17 @@ def _type_badge(t: str) -> str:
     if t == "confirmed":
         return '<span style="background:#1a5c2a;color:#2ecc71;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;">✓ CONFIRMED</span>'
     return '<span style="background:#5c4a00;color:#f5c518;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;">◎ RUMOUR</span>'
+
+
+def _confidence_badge(item: dict) -> str:
+    conf = get_rumour_confidence(item)
+    if conf["tier"] == 0:
+        return ""  # confirmed — no badge needed
+    return (
+        f'<span style="background:{conf["bg"]};color:{conf["color"]};'
+        f'padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;">'
+        f'◉ {conf["label"]} confidence</span>'
+    )
 
 
 def _deal_type_badge(deal_type: str) -> str:
@@ -120,6 +213,7 @@ def render_transfer_card(item: dict) -> str:
                     {_direction_badge(direction) if item_type == "confirmed" else ""}
                     {_deal_type_badge(deal_type) if item_type == "confirmed" else ""}
                     {_type_badge(item_type)}
+                    {_confidence_badge(item)}
                 </div>
             </div>
             {f'<div style="color:{accent};font-size:11px;margin-top:3px;"><b>{direction_label}:</b> {club}</div>' if club else ""}

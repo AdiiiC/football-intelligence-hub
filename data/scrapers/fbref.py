@@ -168,13 +168,22 @@ def get_player_stats(player_name: str, league_id: str, season: str = "2024-2025"
     if name_col not in df.columns:
         return {}
 
-    # Fuzzy match on name
-    mask = df[name_col].str.lower().str.contains(player_name.lower(), na=False)
-    matches = df[mask]
-    if matches.empty:
-        return {}
+    # Fuzzy match on name using rapidfuzz if available
+    try:
+        from rapidfuzz import process, fuzz
+        names = df[name_col].tolist()
+        match = process.extractOne(player_name, names, scorer=fuzz.token_sort_ratio, score_cutoff=70)
+        if not match:
+            return {}
+        matched_name = match[0]
+        row = df[df[name_col] == matched_name].iloc[0]
+    except ImportError:
+        mask = df[name_col].str.lower().str.contains(player_name.lower(), na=False)
+        matches = df[mask]
+        if matches.empty:
+            return {}
+        row = matches.iloc[0]
 
-    row = matches.iloc[0]
     return row.to_dict()
 
 
@@ -202,6 +211,197 @@ _UCL_KEY_STATS = {
     "save_pct":       ["save_pct", "sv%"],
     "pressures_per90": ["press", "pressures"],
 }
+
+# Domestic league FBref comp IDs
+DOMESTIC_COMP_IDS = {
+    "EPL":        "9",
+    "La_liga":    "12",
+    "Bundesliga": "20",
+    "Serie_A":    "11",
+    "Ligue_1":    "13",
+}
+
+# Defensive stats to extract per player (fixes CB/FB Understat gap)
+_DOMESTIC_DEF_STATS = {
+    "tackles_per90":             ["tkl", "tackles"],
+    "tackles_won":               ["tkl_w", "tackles_won"],
+    "interceptions_per90":       ["int", "interceptions"],
+    "blocks_per90":              ["blocks", "blk"],
+    "aerial_duels_won_pct":      ["won%", "aerial_won_pct", "won_pct"],
+    "pressures_per90":           ["press", "pressures"],
+    "errors_per90":              ["err", "errors"],
+    "progressive_passes_per90":  ["prgp", "progressive_passes"],
+    "crosses_into_pen_per90":    ["crs_pa", "crosses_into_pen"],
+    "prog_carries_per90":        ["prgc", "progressive_carries"],
+    "key_passes_per90":          ["kp", "key_passes"],
+    "xg_per90":                  ["xg_per90", "xg"],
+    "xga_per90":                 ["xag", "xg_assist", "xa"],
+    "goals_per90":               ["gls", "goals"],
+    "assists_per90":             ["ast", "assists"],
+    "save_pct":                  ["save_pct", "sv%"],
+}
+
+
+def get_domestic_player_stats(league: str, season: str = "2024-2025") -> list:
+    """
+    Fetch per-player defensive + key stats from FBref domestic league pages.
+    Covers Standard + Defense + Passing pages to fill CB/FB gap left by Understat.
+    Cached 48h. Returns list of dicts keyed by player_name.
+
+    league: Understat league key (EPL, La_liga, Bundesliga, Serie_A, Ligue_1)
+    """
+    comp_id = DOMESTIC_COMP_IDS.get(league)
+    if not comp_id:
+        return []
+
+    cache_key = f"fbref_domestic_{league}_{season.replace('-','_')}"
+    cached = _load_cache(cache_key, 86400 * 2)
+    if cached is not None:
+        return cached
+
+    pages_needed = ["standard", "defense", "passing", "possession"]
+    dfs = {}
+    for stat_type in pages_needed:
+        path_tmpl = STAT_PAGES.get(stat_type)
+        if not path_tmpl:
+            continue
+        url = f"{BASE_URL}{path_tmpl.format(league_id=comp_id)}"
+        soup = _get_html(url)
+        if not soup:
+            continue
+        table_id = f"stats_{stat_type}_{comp_id}"
+        df = _parse_fbref_table(soup, table_id)
+        if not df.empty:
+            dfs[stat_type] = df
+        time.sleep(5)
+
+    if not dfs:
+        return []
+
+    base = dfs.get("standard", pd.DataFrame())
+    if base.empty:
+        return []
+
+    name_col  = next((c for c in base.columns if "player" in c.lower()), None)
+    squad_col = next((c for c in base.columns if "squad" in c.lower()), None)
+    pos_col   = next((c for c in base.columns if c.lower() in ("pos", "position")), None)
+    min_col   = next((c for c in base.columns if "min" in c.lower() and "playing" not in c.lower()), None)
+    if not name_col:
+        return []
+
+    # Merge all pages
+    merged = base.copy()
+    for stat_type, df in dfs.items():
+        if stat_type == "standard":
+            continue
+        nc = next((c for c in df.columns if "player" in c.lower()), None)
+        sc = next((c for c in df.columns if "squad" in c.lower()), None)
+        if nc and sc:
+            df = df.rename(columns={nc: name_col, sc: squad_col})
+            dup = [c for c in df.columns if c in merged.columns and c not in [name_col, squad_col]]
+            df = df.drop(columns=dup, errors="ignore")
+            merged = merged.merge(df, on=[name_col, squad_col], how="left", suffixes=("", f"_{stat_type}"))
+
+    merged = merged[merged[name_col] != "Player"].copy()
+    for col in merged.columns:
+        if col not in (name_col, squad_col, pos_col):
+            merged[col] = pd.to_numeric(merged[col], errors="coerce").fillna(0)
+
+    result = []
+    for _, row in merged.iterrows():
+        pname = str(row.get(name_col, "")).strip()
+        if not pname:
+            continue
+        minutes = float(row.get(min_col, 0)) if min_col else 0
+        if minutes < 90:
+            continue
+        per90 = max(minutes / 90, 1)
+
+        entry = {
+            "player_name": pname,
+            "squad":       str(row.get(squad_col, "")) if squad_col else "",
+            "position":    str(row.get(pos_col, "")) if pos_col else "",
+            "minutes":     int(minutes),
+            "league":      league,
+        }
+        for stat_key, fragments in _DOMESTIC_DEF_STATS.items():
+            val = 0.0
+            for frag in fragments:
+                col = _resolve_col(frag, merged)
+                if col and col in row.index:
+                    raw = float(row[col]) if row[col] else 0
+                    if "per90" in stat_key and stat_key != "save_pct" and stat_key != "aerial_duels_won_pct":
+                        val = round(raw / per90, 3)
+                    else:
+                        val = round(raw, 3)
+                    break
+            entry[stat_key] = val
+        result.append(entry)
+
+    _save_cache(cache_key, result)
+    return result
+
+
+def get_domestic_team_stats(league: str, season: str = "2024-2025") -> dict:
+    """
+    Fetch team-level aggregate stats from FBref for playstyle detection.
+    Returns dict of team_name → {possession_pct, progressive_passes, crosses, aerials_won, pressures, ppda_proxy}
+    Cached 48h.
+    """
+    comp_id = DOMESTIC_COMP_IDS.get(league)
+    if not comp_id:
+        return {}
+
+    cache_key = f"fbref_team_{league}_{season.replace('-','_')}"
+    cached = _load_cache(cache_key, 86400 * 2)
+    if cached is not None:
+        return cached
+
+    # FBref team stats page
+    url = f"{BASE_URL}/en/comps/{comp_id}/stats/squads/{comp_id}-Stats"
+    soup = _get_html(url)
+    if not soup:
+        return {}
+
+    table_id = f"stats_squads_standard_for"
+    df = _parse_fbref_table(soup, table_id)
+    if df.empty:
+        # Try alternate table id
+        tables = soup.find_all("table")
+        for t in tables:
+            try:
+                df = pd.read_html(str(t), header=[0, 1])[0]
+                df.columns = [f"{b}" if a.startswith("Unnamed") else f"{a}_{b}" for a, b in df.columns]
+                df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+                if len(df) > 5:
+                    break
+            except Exception:
+                continue
+
+    if df.empty:
+        return {}
+
+    squad_col = next((c for c in df.columns if "squad" in c.lower()), None)
+    poss_col  = next((c for c in df.columns if "poss" in c.lower()), None)
+    if not squad_col:
+        return {}
+
+    result = {}
+    for _, row in df.iterrows():
+        team = str(row.get(squad_col, "")).strip()
+        if not team or team == "Squad":
+            continue
+        poss = float(row.get(poss_col, 50)) if poss_col else 50
+        prgp = float(_resolve_col("prgp", df) and row.get(_resolve_col("prgp", df), 0) or 0)
+        prgc = float(_resolve_col("prgc", df) and row.get(_resolve_col("prgc", df), 0) or 0)
+        result[team] = {
+            "possession_pct": poss,
+            "progressive_passes": prgp,
+            "progressive_carries": prgc,
+        }
+
+    _save_cache(cache_key, result)
+    return result
 
 
 def _resolve_col(fragment: str, df: pd.DataFrame):

@@ -155,23 +155,154 @@ _STYLE_LABELS = {
 }
 
 
-def determine_team_playstyle(squad: list) -> dict:
+def _fbref_team_scores(team_name: str, league: str, season: str = "2024-2025") -> dict:
     """
-    Analyse squad EA play_styles to find dominant team archetype.
-    Returns {"dominant": str, "scores": {cat: 0-1}, "description": str}.
+    Derive archetype scores (0-100) from FBref team stats.
+    Tries to match team_name to FBref squad names via partial matching.
+    """
+    try:
+        from data.scrapers.fbref import get_domestic_team_stats
+        team_stats = get_domestic_team_stats(league, season)
+    except Exception:
+        return {}
+    if not team_stats:
+        return {}
+
+    # Fuzzy-match team name
+    import unicodedata
+    def _n(s): return unicodedata.normalize("NFKD", s).encode("ascii","ignore").decode().lower().strip()
+    t_norm = _n(team_name)
+    matched = None
+    for fbref_team in team_stats:
+        if _n(fbref_team) == t_norm or t_norm in _n(fbref_team) or _n(fbref_team) in t_norm:
+            matched = fbref_team
+            break
+    if not matched:
+        return {}
+
+    stats = team_stats[matched]
+    poss = stats.get("possession_pct", 50)
+    prgp = stats.get("progressive_passes", 0)
+    prgc = stats.get("progressive_carries", 0)
+
+    # Normalize to 0-100 scores per archetype
+    return {
+        "possession":     min(100, max(0, (poss - 40) * 3.33)),    # 40%→0, 70%→100
+        "high_press":     min(100, max(0, prgp / 3)),               # proxy via prog passes
+        "counter_attack": min(100, max(0, prgc / 2)),               # proxy via prog carries
+        "physical":       50,                                        # no direct FBref signal
+        "creative":       50,                                        # no direct FBref signal
+    }
+
+
+def _understat_situation_scores(team_name: str, league: str, season: str = "2025") -> dict:
+    """
+    Derive archetype scores from Understat team situation xG splits.
+    Returns dict of archetype → 0-100 score.
+    """
+    try:
+        from data.scrapers.understat import get_league_player_stats
+        players = get_league_player_stats(league, season)
+    except Exception:
+        return {}
+    if not players:
+        return {}
+
+    import unicodedata
+    def _n(s): return unicodedata.normalize("NFKD", s).encode("ascii","ignore").decode().lower().strip()
+    t_norm = _n(team_name)
+    team_players = [p for p in players if t_norm in _n(p.get("team", "")) or _n(p.get("team", "")) in t_norm]
+    if not team_players:
+        return {}
+
+    # Understat gives situation xG in player-level data — we aggregate team totals
+    # key_passes and xG proxy open play; no direct counter/set-piece splits in player API
+    total_xg = sum(float(p.get("xg_per90", 0) or 0) * max(int(p.get("time", 0) or 0) / 90, 1) for p in team_players)
+    total_xa = sum(float(p.get("xa_per90", 0) or 0) * max(int(p.get("time", 0) or 0) / 90, 1) for p in team_players)
+    n = max(len(team_players), 1)
+
+    return {
+        "possession":     min(100, (total_xa / n) * 100),   # high chance creation → possession
+        "high_press":     50,
+        "counter_attack": 50,
+        "physical":       50,
+        "creative":       min(100, (total_xa / n) * 120),
+    }
+
+
+def determine_team_playstyle(squad: list, team_name: str = "", league: str = "") -> dict:
+    """
+    3-source blended playstyle detection:
+      50% FBref domestic team stats
+      30% EA FC PlayStyle tags (existing logic)
+      20% Understat situation xG (proxy)
+    Returns {dominant, scores, description, conflicts, sources}.
     """
     n = len(squad)
     if n == 0:
-        return {"dominant": "unknown", "scores": {}, "description": "Insufficient data"}
+        return {"dominant": "unknown", "scores": {}, "description": "Insufficient data", "conflicts": [], "sources": {}}
+
+    # ── Source 1: EA PlayStyle tags (30%) ─────────────────────────────────────
     counts = {k: 0 for k in _PLAYSTYLE_CATEGORIES}
     for player in squad:
         tags = set(player.get("play_styles") or [])
         for cat, cat_tags in _PLAYSTYLE_CATEGORIES.items():
             if tags & cat_tags:
                 counts[cat] += 1
-    scores = {k: round(v / n, 2) for k, v in counts.items()}
-    dominant = max(scores, key=lambda k: scores[k]) if scores else "unknown"
-    return {"dominant": dominant, "scores": scores, "description": _STYLE_LABELS.get(dominant, dominant)}
+    ea_scores = {k: round(v / n * 100, 1) for k, v in counts.items()}
+
+    # ── Source 2: FBref team stats (50%) ──────────────────────────────────────
+    us_league = league  # Understat league name
+    fbref_scores = _fbref_team_scores(team_name, us_league) if team_name and us_league else {}
+
+    # ── Source 3: Understat situation xG (20%) ────────────────────────────────
+    us_scores = _understat_situation_scores(team_name, us_league) if team_name and us_league else {}
+
+    # ── Blend ─────────────────────────────────────────────────────────────────
+    archetypes = list(_PLAYSTYLE_CATEGORIES.keys())
+    blended = {}
+    sources_used = {"ea": True, "fbref": bool(fbref_scores), "understat": bool(us_scores)}
+    for arch in archetypes:
+        ea  = ea_scores.get(arch, 0)
+        fb  = fbref_scores.get(arch, ea)   # fall back to EA if FBref missing
+        us  = us_scores.get(arch, ea)      # fall back to EA if Understat missing
+        if fbref_scores and us_scores:
+            blended[arch] = round(0.50 * fb + 0.30 * ea + 0.20 * us, 1)
+        elif fbref_scores:
+            blended[arch] = round(0.65 * fb + 0.35 * ea, 1)
+        else:
+            blended[arch] = ea
+
+    dominant = max(blended, key=lambda k: blended[k]) if blended else "unknown"
+
+    # ── Conflict detection ────────────────────────────────────────────────────
+    conflicts = []
+    if fbref_scores:
+        for arch in archetypes:
+            ea_v  = ea_scores.get(arch, 0)
+            fb_v  = fbref_scores.get(arch, 0)
+            delta = abs(ea_v - fb_v)
+            if delta > 30:
+                if ea_v > fb_v:
+                    conflicts.append(
+                        f"EA tags suggest **{_STYLE_LABELS[arch]}** ({ea_v:.0f}) but FBref shows low signal ({fb_v:.0f}) "
+                        f"— squad built for this style but manager may not be using it"
+                    )
+                else:
+                    conflicts.append(
+                        f"FBref confirms **{_STYLE_LABELS[arch]}** ({fb_v:.0f}) but EA tags are low ({ea_v:.0f}) "
+                        f"— tactical system exceeds what individual player profiles suggest"
+                    )
+
+    return {
+        "dominant":    dominant,
+        "scores":      blended,
+        "ea_scores":   ea_scores,
+        "fbref_scores": fbref_scores,
+        "description": _STYLE_LABELS.get(dominant, dominant),
+        "conflicts":   conflicts,
+        "sources":     sources_used,
+    }
 
 
 def _playstyle_fit(player: dict, team_style: dict) -> tuple:
@@ -442,6 +573,59 @@ def recommend_sales(squad: list, us_league: str = "") -> list:
     return sell_candidates
 
 
+def historical_transfer_grade(player: dict) -> dict:
+    """
+    Grade a past transfer based on:
+      - fee paid vs current market value delta
+      - EA overall rating vs squad average at acquisition age
+
+    Returns {grade, label, delta_m, delta_pct, rationale}
+    """
+    fee_paid = player.get("fee_paid_m") or 0
+    current_mv = player.get("market_value_m") or 0
+
+    # Determine delta
+    if fee_paid > 0 and current_mv > 0:
+        delta_m = current_mv - fee_paid
+        delta_pct = (delta_m / fee_paid) * 100
+    elif fee_paid == 0 and current_mv > 0:
+        # Free transfer that is now valuable
+        delta_m = current_mv
+        delta_pct = 100.0
+    else:
+        delta_m = 0.0
+        delta_pct = 0.0
+
+    # Grade thresholds (%)
+    if delta_pct >= 50:
+        grade, label, color = "A+", "Bargain", "#3ddc84"
+    elif delta_pct >= 15:
+        grade, label, color = "A",  "Good Value", "#2ecc71"
+    elif delta_pct >= -10:
+        grade, label, color = "B",  "Fair Deal",  "#c9a84c"
+    elif delta_pct >= -30:
+        grade, label, color = "C",  "Slight Overpay", "#ff8c00"
+    else:
+        grade, label, color = "D",  "Overpaid", "#e74c3c"
+
+    rationale_parts = []
+    if fee_paid > 0:
+        rationale_parts.append(f"Paid €{fee_paid:.0f}M → now worth €{current_mv:.0f}M ({delta_pct:+.0f}%)")
+    elif current_mv > 0:
+        rationale_parts.append(f"Free transfer, now valued at €{current_mv:.0f}M")
+    else:
+        rationale_parts.append("Insufficient fee/value data to grade")
+
+    return {
+        "grade":     grade,
+        "label":     label,
+        "color":     color,
+        "delta_m":   round(delta_m, 1),
+        "delta_pct": round(delta_pct, 1),
+        "rationale": " | ".join(rationale_parts),
+    }
+
+
 def _get_stat(player: dict, stat: str) -> float:
     """Pull a stat from player top-level, fbref dict, or understat dict."""
     # Check top-level first (promoted from Understat during enrichment)
@@ -667,6 +851,45 @@ def fit_analysis(player: dict, club_squad: list[dict], club_name: str) -> dict:
         else:
             must_adapt.append(f"**{label}** — significant gap to bridge ({player_val:.2f} vs {club_val:.2f})")
             fit_scores.append(25)
+
+    # ── EA attribute fallback (always runs if stat-based yields < 2 results) ──
+    if len(fit_scores) < 2:
+        _EA_MAP = [
+            ("pac", "Pace / Acceleration"),
+            ("sho", "Shooting ability"),
+            ("pas", "Passing range"),
+            ("dri", "Dribbling & ball control"),
+            ("def_", "Defensive positioning"),
+            ("phy", "Physical presence"),
+        ]
+        squad_ea = {}
+        for attr, _ in _EA_MAP:
+            vals = [float(p.get(attr, 0) or 0) for p in club_squad if p.get(attr)]
+            squad_ea[attr] = float(np.mean(vals)) if vals else 0.0
+
+        for attr, label in _EA_MAP:
+            player_val = float(player.get(attr, 0) or 0)
+            club_val = squad_ea.get(attr, 0)
+            if club_val == 0 or player_val == 0:
+                continue
+            ratio = player_val / club_val
+            if ratio >= 1.10:
+                thrives.append(
+                    f"**{label}** — above squad average ({player_val:.0f} vs {club_val:.0f})"
+                )
+                fit_scores.append(88)
+            elif ratio >= 0.92:
+                fit_scores.append(72)
+            elif ratio >= 0.80:
+                must_adapt.append(
+                    f"**{label}** — slightly below squad standard ({player_val:.0f} vs {club_val:.0f})"
+                )
+                fit_scores.append(50)
+            else:
+                must_adapt.append(
+                    f"**{label}** — significant gap to bridge ({player_val:.0f} vs {club_val:.0f})"
+                )
+                fit_scores.append(28)
 
     overall = float(np.mean(fit_scores)) if fit_scores else 60.0
 

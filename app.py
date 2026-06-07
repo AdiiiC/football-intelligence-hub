@@ -19,6 +19,26 @@ _CSS_FILE = Path(__file__).parent / "ui" / "styles" / "theme.css"
 if _CSS_FILE.exists():
     st.markdown(f"<style>{_CSS_FILE.read_text()}</style>", unsafe_allow_html=True)
 
+_LIGHT_CSS = """
+<style>
+:root {
+  --bg-primary:     #f0f4f8;
+  --bg-secondary:   #ffffff;
+  --bg-card:        #ffffff;
+  --bg-card-hover:  #e8eef4;
+  --border:         #d0dce8;
+  --border-bright:  #b0c4d8;
+  --text-primary:   #1a2a3a;
+  --text-secondary: #4a6070;
+  --text-muted:     #8899aa;
+}
+[data-testid="stSidebar"] { background: #e8eef4 !important; }
+[data-testid="stSidebar"] * { color: #1a2a3a !important; }
+body, .main { background: #f0f4f8 !important; color: #1a2a3a !important; }
+[data-testid="stMetricValue"] { color: #1a2a3a !important; }
+</style>
+"""
+
 # ── Sidebar branding ────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown(
@@ -34,6 +54,43 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
+
+    # ── Dark / Light mode toggle ─────────────────────────────────────────────
+    light_mode = st.toggle("☀️ Light mode", value=False, key="light_mode")
+    if light_mode:
+        st.markdown(_LIGHT_CSS, unsafe_allow_html=True)
+
+    # ── Health monitor ───────────────────────────────────────────────────────
+    import time as _time
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _check_sources():
+        import requests as _req
+        results = {}
+        checks = {
+            "Transfermarkt": ("https://www.transfermarkt.com", "GET", None),
+            "Understat":     ("https://understat.com", "GET", None),
+            "FBref":         ("https://fbref.com", "GET", None),
+            "EA FC":         ("https://www.ea.com/en-gb/games/ea-sports-fc", "GET", None),
+        }
+        for name, (url, method, data) in checks.items():
+            try:
+                r = _req.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+                results[name] = r.status_code == 200
+            except Exception:
+                results[name] = False
+        return results
+
+    with st.expander("🔌 Data Sources", expanded=False):
+        health = _check_sources()
+        for src, ok in health.items():
+            icon = "🟢" if ok else "🔴"
+            st.markdown(f"{icon} **{src}**", unsafe_allow_html=False)
+        from data.cache_db import cache_stats, cache_cleanup_expired
+        stats = cache_stats()
+        st.caption(f"Cache: {stats['total_entries']} entries · {stats['size_kb']} KB")
+        if st.button("🗑 Clear expired cache", key="clear_cache"):
+            n = cache_cleanup_expired()
+            st.success(f"Removed {n} expired entries")
 
 # ── Home page content ────────────────────────────────────────────────────────
 st.markdown(

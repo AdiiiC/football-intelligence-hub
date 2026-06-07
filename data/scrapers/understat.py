@@ -79,15 +79,15 @@ _XHR_HEADERS = {
 
 def _get_player_data(player_id: str) -> Optional[dict]:
     """
-    Fetch full player data from Understat using the XHR endpoint.
-    Requires a session cookie from visiting the player page first.
+    Fetch player data (shots, matches, groups) from Understat via GET.
+    Must visit the player page first to obtain a PHPSESSID cookie,
+    then GET getPlayerData/{id} with X-Requested-With header.
     """
     cache_key = f"us_playerdata_{player_id}"
     cached = _load_cache(cache_key, CACHE_TTL_STATS)
     if cached is not None:
         return cached
 
-    # Establish session by visiting the player page first (gets PHPSESSID)
     page_url = f"{BASE_URL}/player/{player_id}"
     page_resp = SESSION.get(page_url, timeout=15)
     if page_resp.status_code != 200:
@@ -95,8 +95,11 @@ def _get_player_data(player_id: str) -> Optional[dict]:
 
     data_resp = SESSION.get(
         f"{BASE_URL}/getPlayerData/{player_id}",
-        headers={**_XHR_HEADERS, "Referer": page_url},
-        cookies=page_resp.cookies,
+        headers={
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": page_url,
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+        },
         timeout=20,
     )
     if data_resp.status_code != 200:
@@ -176,58 +179,128 @@ def get_player_xg_timeline(player_id: str, season: str = "2024") -> list[dict]:
     return timeline
 
 
-def search_player_understat(name: str, league: str = "EPL", season: str = "2024") -> Optional[dict]:
+def search_player_understat(name: str, league: str = "EPL", season: str = "2025") -> Optional[dict]:
     """
     Search Understat for a player by name within a league via POST API.
     Returns the best-matching player dict with their Understat ID.
+    Tries current season first, falls back to previous season automatically.
+    Matches on full name, partial containment, or last-name token overlap.
     """
-    cache_key = f"us_search_{league}_{season}_{name.lower().replace(' ', '_')}"
-    cached = _load_cache(cache_key, 86400 * 7)
-    if cached:
-        return cached
-
-    try:
-        resp = SESSION.post(
-            f"{BASE_URL}/main/getPlayersStats/",
-            data={"league": league, "season": season},
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            return None
-        players = resp.json().get("players", [])
-    except Exception:
-        return None
-
-    name_lower = name.lower()
-    # Normalize: strip accents for comparison
     import unicodedata
-    def _norm(s):
-        return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
+
+    def _norm(s: str) -> str:
+        _MAP = str.maketrans({"Ø": "O", "ø": "o", "Æ": "AE", "æ": "ae", "ß": "ss"})
+        return unicodedata.normalize("NFKD", s.translate(_MAP)).encode("ascii", "ignore").decode().lower().strip()
+
+    def _best_match(players: list, name_norm: str) -> Optional[dict]:
+        name_tokens = name_norm.split()
+        name_surname = name_tokens[-1] if name_tokens else ""
+        best = None
+        best_score = 0
+        for p in players:
+            p_norm = _norm(p.get("player_name", ""))
+            p_tokens = p_norm.split()
+            p_surname = p_tokens[-1] if p_tokens else ""
+            # Exact full match
+            if p_norm == name_norm:
+                return p
+            # Full containment
+            if name_norm in p_norm or p_norm in name_norm:
+                score = 50 + len(set(name_tokens) & set(p_tokens))
+                if score > best_score:
+                    best, best_score = p, score
+                continue
+            # Surname-to-surname match (last token of both names)
+            if name_surname and p_surname == name_surname:
+                score = 30
+                if score > best_score:
+                    best, best_score = p, score
+                continue
+            # Multi-token overlap only (≥2 tokens must match)
+            shared = set(name_tokens) & set(p_tokens)
+            if len(shared) >= 2:
+                score = len(shared) * 10
+                if score > best_score:
+                    best, best_score = p, score
+        return best
 
     name_norm = _norm(name)
-    best = None
-    best_score = 0
-    for p in players:
-        p_name = p.get("player_name", "")
-        p_norm = _norm(p_name)
-        if p_norm == name_norm:
-            best = p
-            break
-        if name_norm in p_norm or p_norm in name_norm:
-            # Prefer longer match (more specific)
-            score = len(set(name_norm.split()) & set(p_norm.split()))
-            if score > best_score:
-                best = p
-                best_score = score
+    # Try requested season first, then adjacent seasons
+    seasons_to_try = [season]
+    try:
+        s_int = int(season)
+        for delta in [1, -1]:
+            alt = str(s_int + delta)
+            if alt not in seasons_to_try:
+                seasons_to_try.append(alt)
+    except ValueError:
+        pass
 
-    if best:
-        _save_cache(cache_key, best)
-    return best
+    for szn in seasons_to_try:
+        cache_key = f"us_search_{league}_{szn}_{name_norm.replace(' ', '_')}"
+        cached = _load_cache(cache_key, 86400 * 7)
+        if cached:
+            return cached
+        try:
+            resp = SESSION.post(
+                f"{BASE_URL}/main/getPlayersStats/",
+                data={"league": league, "season": szn},
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                continue
+            players = resp.json().get("players", [])
+        except Exception:
+            continue
+
+        best = _best_match(players, name_norm)
+        if best:
+            _save_cache(cache_key, best)
+            return best
+
+    return None
 
 
 def get_player_understat_url(player_id: str) -> str:
     """Return the Understat player page URL for iframe embedding."""
     return f"{BASE_URL}/player/{player_id}"
+
+
+def get_player_season_summary(player_id: str) -> list[dict]:
+    """
+    Return per-season stat summary from groups['season'].
+    Each dict: season, team, apps, minutes, goals, assists, shots, xG, xA, xG90, xA90, npxG
+    """
+    data = _get_player_data(player_id)
+    if not data:
+        return []
+    seasons_raw = (data.get("groups") or {}).get("season", [])
+    result = []
+    for row in seasons_raw:
+        try:
+            mins = max(int(row.get("time", 1)), 1)
+            per90 = mins / 90
+            xg = float(row.get("xG", 0))
+            xa = float(row.get("xA", 0))
+            result.append({
+                "season":  str(int(row.get("season", 0))) + "/" + str(int(row.get("season", 0)) + 1),
+                "team":    row.get("team", ""),
+                "apps":    int(row.get("games", 0)),
+                "minutes": mins,
+                "goals":   int(row.get("goals", 0)),
+                "assists": int(row.get("assists", 0)),
+                "shots":   int(row.get("shots", 0)),
+                "xG":      round(xg, 2),
+                "xA":      round(xa, 2),
+                "npxG":    round(float(row.get("npxG", 0)), 2),
+                "xG90":    round(xg / per90, 2),
+                "xA90":    round(xa / per90, 2),
+            })
+        except Exception:
+            continue
+    # Sort newest first
+    result.sort(key=lambda r: r["season"], reverse=True)
+    return result
 
 
 

@@ -1,7 +1,290 @@
-1. include South American Leagues and their own internal competitions so that for transfer recommendations even they can show up for many clubs.
+1. include South American Leagues and their own internal competitions along with 2nd division competitions of the top 5 leagues so that for transfer recommendations even they can show up for all clubs.
 2. transfer recommendations must be based on this fact:
     a. if t>=2 years, compare relevant (as per player position) previous and current szn stats vs others in top 6 of league and UCL.. Find players which are of the same profile and beating that player in the weak spots and systemic fit overall.
     b. if t=1 yr, current year stat and give time if systemic fit can be achieved else wait for another half szn.
 3. Detailed Analysis must give the stats where the player outperforms and can contribute in fixing issues and overall systemic fit.
 4. Try to find in detail GK and Defender Stats.
 5. Based on completed transfer, give verdict as to whether its overpaid, underpaid or fairly paid as per prediction model considering all relevant factors and what the player can contribute to the team.
+6. Team playstyle is something which should be determined based on all 3 sources combined:
+   - FBref domestic team stats (50% weight): possession%, PPDA, progressive passes/carries, crosses, aerials
+   - EA FC PlayStyle tags (30% weight): aggregate squad tags → archetype scores
+   - Understat situation xG (20% weight): OpenPlay vs Counter vs SetPiece xG split
+   - Conflict detection: flag archetypes where sources disagree by >30pts with insight text
+     e.g. "EA says possession squad but FBref shows low possession → manager not using squad optimally"
+     e.g. "High counter xG despite possession dominance → lethal on transition (think 2024 Arsenal)"
+
+--- DEVELOPER UPGRADE PIPELINE ---
+
+TIER 1 — Data & Model (High Impact, Foundational)
+--------------------------------------------------
+[ ] 1. FBref domestic defensive stats scraper
+        - Scrape FBref domestic leagues (comp IDs: PL=9, LaLiga=12, BL=20, SerieA=11, L1=13)
+        - Stats: tackles_won, interceptions, blocks, aerial_duels_won_pct, pressures, errors,
+          progressive_passes, crosses_into_penalty_area
+        - Use for CB/FB peer percentile comparison — fixes the gap where Understat has no defensive stats
+        - Cache 48h per league per season
+
+[ ] 2. Playstyle Detection v2 (3-source blend + conflict detection)
+        - FBref team stats scraper (new) → possession%, PPDA, prog passes, crosses, aerials per team
+        - Understat team situation xG split (OpenPlay/Counter/SetPiece/FromCorner)
+        - Blend: 50% FBref + 30% EA tags + 20% Understat situations per archetype
+        - Conflict detection: if two sources disagree >30pts on same archetype → surface insight
+
+[ ] 3. FBref domestic player stats for all 5 leagues (full positional coverage)
+        - Extend get_ucl_player_stats pattern to domestic leagues
+        - Fills all positional peer benchmarks — currently only attackers covered via Understat
+
+[ ] 4. Player name fuzzy matching (cross-source joins)
+        - TM, EA, Understat, FBref all use different name formats
+        - Implement token-set ratio matching (rapidfuzz) across all enrichment steps
+        - Fixes silent enrichment failures on accented/abbreviated names
+
+[ ] 5. Proper caching layer (SQLite + DiskCache)
+        - Replace flat JSON files with SQLite-backed cache
+        - TTL management, versioning, no race conditions on parallel reads
+        - Single cache DB at data/cache/football_cache.db
+
+TIER 2 — Architecture & Reliability
+-------------------------------------
+[ ] 6. Async scraping (asyncio + httpx)
+        - Squad + EA + Understat + FBref currently fire sequentially — slow on cold cache
+        - Convert enrichment pipeline to async: fetch all sources concurrently per player
+        - Target: cold load time cut from ~30s → ~8s
+
+[ ] 7. Scraper health monitor
+        - Background check on startup: ping each source with a known club/player
+        - Surface warning banner in app if any source is returning empty/error
+        - Catches HTML structure changes (like the TM div.transferanker incident) early
+
+[ ] 8. .env config for league/team IDs
+        - FBref comp IDs, Understat league names, TM base URL hardcoded across files
+        - Move all to config/settings.py or .env with a single source of truth
+
+[ ] 9. Unit tests for scrapers (snapshot-based)
+        - Snapshot HTML samples from each source → test parser against snapshot
+        - CI catches source structure changes before they silently break production
+
+[ ] 10. Data validation layer (schema enforcement)
+        - Pydantic model for player dict — validate at enrichment boundary
+        - NaN/None propagation into sell logic causes silent wrong signals
+        - Reject or flag incomplete player records before scoring
+
+TIER 3 — Features (Fan + Developer value)
+------------------------------------------
+[ ] 11. Head-to-head player comparison
+        - Pick 2 players → side-by-side radar charts + stat table + xG timelines
+        - Data already exists, just UI work
+        - New page: pages/05_Compare_Players.py
+
+[ ] 12. Formation view with drag-drop pitch
+        - Render 11 players on a pitch formation (4-3-3, 4-2-3-1, etc.)
+        - mplsoccer Pitch with player avatars + EA overall overlaid
+        - Select formation → auto-assign players by position
+
+[ ] 13. Dark mode toggle
+        - CSS theme swap via Streamlit session state
+        - Dark: current scheme | Light: clean white/grey broadcast aesthetic
+        - Toggle in sidebar
+
+[ ] 14. Scout Report PDF export
+        - One-click generate professional scouting PDF for any player
+        - Includes: hero card, radar, xG timeline, sell signals, fit analysis
+        - Library: reportlab or weasyprint
+
+[ ] 15. Transfer rumour confidence scoring
+        - Weight source reliability: Fabrizio Romano >> Sky Sports >> local tabloid
+        - Source name pattern matching → confidence tier (Confirmed / Reliable / Rumour)
+        - Display as confidence bar on transfer cards
+
+[ ] 16. Historical transfer grade ("was it worth it?")
+        - For completed transfers: compare fee paid vs current market value + stats delivered
+        - Grade: Bargain / Fair / Overpaid
+        - Tie into price prediction model output
+
+[ ] 17. Match week form tracker (rolling 5-game xG)
+        - Per-player rolling window: last 5 games xG, goals, assists
+        - Hot streak / cold streak indicator
+        - Needs match-level data — Understat matchesData already fetched
+
+[ ] 18. "What if" transfer simulator
+        - Drag a rumoured signing into your squad
+        - Recompute playstyle scores + squad depth + sell signals with hypothetical player added
+        - Visualise how the squad changes
+
+
+--- NEXT UPGRADE PIPELINE (v2) ---
+
+TIER 1 — Data Expansion & Intelligence
+---------------------------------------
+
+[ ] 19. South American + 2nd division league support
+        - Add Brasileirão (br1), Argentine Primera (arg1), Liga MX (mexc1)
+          to Transfermarkt and FBref scrapers
+        - Add Championship (gb2), 2. Bundesliga (de2), Serie B (it2), Ligue 2 (fr2),
+          Liga Smartbank (es2) as domestic feeder leagues
+        - Extend TOP_5_LEAGUES → SCOUTABLE_LEAGUES in settings.py
+        - TM league IDs: Championship=10, 2.BL=33, Serie B=37, Ligue 2=60
+        - FBref comp IDs: Championship=10, 2.BL=33, Serie B=18
+        - Enables transfer targets from feeder leagues on Transfer Targets page
+        - Expected: 3–5x larger candidate pool for recommend_buys()
+
+[ ] 20. Player similarity engine ("Find me players like X")
+        - Build cosine similarity index across normalized per-90 stat vectors
+          (goals, assists, xG, xA, progressive carries/passes, tackles, pressures)
+        - Embed each player as a 12-d normalized vector using FBref domestic stats
+        - On Player Profile page: "Players like this" expander showing top-5 matches
+        - Filter by: same position group, age ≤ player.age+3, value ≤ 2× player.mv
+        - Similarity score displayed as a match% badge on mini cards
+        - Implementation: scipy.spatial.distance.cosine over squad-enriched vectors
+        - Store vectors in SQLite cache keyed by (player_name, league, season)
+
+[ ] 21. Injury history & availability scoring
+        - Scrape TM injury history: /profil/verletzungen/spieler/{tm_id}
+        - Parse: injury type, start date, end date, days missed, matches missed
+        - Derive availability_pct = (available_days / season_days) × 100
+        - Incorporate into sell score: availability < 70% in 2+ seasons → +2 sell signal
+        - Display on Player Profile: injury timeline (visual bar chart)
+        - Cache per player 72h (rarely changes)
+        - Fields: injury, from_date, until_date, days, games_missed
+
+[ ] 22. PPDA (Passes Allowed Per Defensive Action) proper implementation
+        - Currently high_press archetype uses progressive_passes as proxy — inaccurate
+        - PPDA = opponent_passes_allowed / (tackles + interceptions + fouls in def. third)
+        - FBref defensive stats have the raw numbers to compute this per team
+        - Add ppda to get_domestic_team_stats() return dict
+        - Re-calibrate high_press score in _fbref_team_scores():
+            high_press = min(100, max(0, (12 - ppda) * 8.33))  # 12→0, 3→100
+        - Conflict detection will be sharper: EA press tags vs actual PPDA divergence
+
+[ ] 23. Age-adjusted performance trajectory model
+        - Position-specific peak age windows from football research:
+            GK: 26–33, CB: 26–30, FB: 23–28, DM: 24–30,
+            CM: 24–29, AM: 22–28, Winger: 21–26, ST: 23–29
+        - Add trajectory_phase to each player: "Developing" / "Peak" / "Declining"
+        - Adjust sell score: Declining + outside peak → +1 urgency signal
+        - In fit_analysis(): flag "Player entering decline phase — short contract window"
+        - In price_predictor: apply age curve multiplier on market_value_m projection
+        - Visual in Player Profile: age-on-curve indicator line
+
+[ ] 24. Loan deal tracker & buy option analyzer
+        - TM squad pages include loan status in player rows → parse is_loan: bool
+        - Also parse: parent_club, loan_until, buy_option_m (when listed)
+        - Surface in Squad Overview: separate "On Loan" section
+        - Analyzer: if loan player in top-3 sell candidates → "trigger buy option" insight
+        - If loan player in recommend_buys() → "prioritise permanent deal" flag
+        - buy_option_value = buy_option_m vs current_market_value delta → instant grade
+
+
+TIER 2 — UX & Analytics Features
+----------------------------------
+
+[ ] 25. Scouting shortlist (persistent watchlist)
+        - Persistent watchlist stored in SQLite cache (key: "shortlist")
+        - "Add to Shortlist ⭐" button on Player Profile and Compare pages
+        - New page: pages/08_Shortlist.py — shows all shortlisted players as cards
+        - Per player: current MV, age, position, last xG, rumour alert toggle
+        - Export shortlist to PDF (reuse generate_scout_report_pdf in batch mode)
+        - Shortlist diff: flag players whose MV changed since last visit
+
+[ ] 26. Squad financial dashboard
+        - Estimate weekly wage bill per player from TM market value heuristic:
+            estimated_weekly_wage = market_value_m × 1200  (£/week rough proxy)
+        - Total wage bill vs Premier League salary cap benchmarks
+        - Net transfer spend: sum(fee_paid_m) - sum(fee_received_m from sells)
+        - Remaining budget estimator: user inputs total budget → shows how much left
+          after rumoured signings
+        - FFP indicator: net spend / 3-year rolling average (simplified rule)
+        - Display in Squad Overview as collapsible financial panel
+
+[ ] 27. Player heat map (Understat shot & touch positions)
+        - Understat shots data includes (x, y) coordinates — already fetched
+        - Render using mplsoccer VerticalPitch with KDE density overlay
+        - Shot map already shows individual points; heat map tab shows density zones
+        - Add to xG Timeline tab: "Heat Map" toggle between scatter and KDE
+        - Color scale: cold blue (few touches) → hot red (high density)
+        - Also generate a "danger zone" highlight: area of pitch where player scores from
+
+[ ] 28. Squad age pyramid & contract cliff chart
+        - Bar chart grouped by position, bars = individual players, color = contract length
+        - Green (3+ yrs) / Amber (1–2 yrs) / Red (<1 yr or expired)
+        - Contract cliff: count players expiring in each year → "2027 cliff: 6 players"
+        - Overlay squad value decay curve based on age trajectories (from upgrade #23)
+        - Display in Squad Overview as new tab "📅 Age & Contracts"
+        - Data: contract_expiry already in player dict from TM scraper
+
+[ ] 29. Transfer fee inflation index
+        - Historical baseline: median transfer fee per position × season from FBref / TM
+        - Store as static lookup table in config: TRANSFER_INFLATION = {year: multiplier}
+        - Adjust historical_transfer_grade() to inflation-adjusted comparison:
+            real_value_today = fee_paid_m × TRANSFER_INFLATION[year_paid] / TRANSFER_INFLATION[2025]
+        - Surface in historical grade card: "In today's money: €{real_value}M"
+        - Gives fair comparison across different eras (2018 deal vs 2025 deal)
+
+[ ] 30. Live fixture results integration
+        - Use football-data.org free tier API (no key needed for basic endpoints)
+            GET https://api.football-data.org/v4/competitions/{code}/matches?status=LIVE
+        - Show today's fixture results in a mini ticker on the home page (app.py)
+        - Codes: PL, PD, BL1, SA, FL1 for the Top 5
+        - Update every 60s when a match is live (st.rerun() with countdown)
+        - When a watched player's club plays → highlight with ⚽ in sidebar
+        - Cache: 60s TTL for live, 3600s for completed match results
+
+
+TIER 3 — Intelligence & Automation
+-------------------------------------
+
+[ ] 31. Player news aggregator
+        - Use RSS/Google News API: https://news.google.com/rss/search?q={player_name}+transfer
+        - Parse top 5 headlines per player with publication date and source domain
+        - Surface in Player Profile as "📰 Latest News" expander (below hero card)
+        - Source domain → auto-apply confidence tier from get_rumour_confidence()
+          so headlines are shown with High/Medium/Low badge immediately
+        - Cache 30min TTL per player
+        - Deduplicate by headline similarity (rapidfuzz token_sort_ratio > 80)
+
+[ ] 32. xG build-up chain analytics
+        - Understat matchesData contains all shot events with player chains
+        - For each shot: identify last progressive pass giver + carrier before shot
+        - Compute "build-up involvement score" = shots_created + carries_into_box
+        - Add to player dict as buildup_score and display in radar for AM/CM/Winger
+        - Squad-level: show which combinations of players produce the most high-xG shots
+          ("Saka → Havertz chain: 0.68 xG/sequence in 2024-25")
+        - New metric surfaces invisible contributors who don't appear in xG directly
+
+[ ] 33. Contract value & extension ROI model
+        - When a player's contract expires in ≤2 years → compute "extension cost"
+          estimated_new_wage_hike_pct = 15–40% based on age, performance percentile
+          new_annual_wage = current_wage × (1 + hike_pct)
+          extension_roi = (new_contract_years × new_wage) vs alternative_replacement_cost
+        - Display in Player Profile Club Fit tab: "Cost to keep vs Cost to replace"
+        - Feeds into recommend_sales(): if extension_cost > replacement_cost → sell signal
+        - Data needed: estimated wage from market value heuristic (from upgrade #26)
+
+[ ] 34. International duty fatigue tracker
+        - Understat and FBref don't have international data — use football-data.org
+          GET /v4/persons/{id}/matches?competitions=WC,EC,CAF,CONCACAF
+        - Track matches played in international windows in the last 12 months
+        - Fatigue signal: international_games_l12m > 15 → flag in sell candidates
+        - Display in Player Profile: "International load: {n} caps this season"
+        - Also factor into price_predictor: heavy international duty → injury risk
+          → discount market value by 5–10%
+
+[ ] 35. Shortlist rumour alert system
+        - Extend shortlist (upgrade #25) with rumour_alert: bool per player
+        - On app startup: for each shortlisted player with alert=True,
+          ping Google News RSS and TM transfer page for new rumours
+        - If new rumour found since last_checked → surface as ⚠️ banner at top of page
+        - Diff detection: hash last 3 rumour headlines per player; fire if hash changes
+        - Store last_checked and rumour_hash in SQLite shortlist table
+
+[ ] 36. Multi-season squad trend analytics
+        - For each club track across 3 seasons: avg_age, squad_value, avg_overall,
+          weakest_position (from _heuristic_analysis())
+        - Store in SQLite as squad_snapshots table (club, season, metrics JSON)
+        - Visualise as line charts in Squad Overview "📈 Squad Trends" tab:
+            - Squad value over time
+            - Average age trajectory
+            - Depth score per position group
+        - Trend insight: "Squad is ageing +0.8yr/season — rejuvenation needed at CB"
+        - Data: re-run enrichment for last 2 prior seasons (TM historical rosters exist)
+

@@ -150,3 +150,35 @@ with st.expander("📋 Full Squad Table"):
         })
     df = pd.DataFrame(rows)
     st.dataframe(df, width="stretch", hide_index=True)
+
+# ── Historical Transfer Grades ────────────────────────────────────────────────
+with st.expander("📊 Historical Transfer Grades"):
+    from models.squad_analyzer import historical_transfer_grade
+    import pandas as pd
+
+    grade_rows = []
+    for p in squad:
+        if not (p.get("fee_paid_m") or p.get("market_value_m")):
+            continue
+        g = historical_transfer_grade(p)
+        grade_rows.append({
+            "Name":        p.get("name", ""),
+            "Pos":         p.get("position_code", ""),
+            "Fee Paid":    f"€{p['fee_paid_m']:.0f}M" if p.get("fee_paid_m") else "Free",
+            "Current MV":  f"€{p['market_value_m']:.0f}M" if p.get("market_value_m") else "—",
+            "Δ Value":     f"{g['delta_m']:+.1f}M",
+            "Δ %":         f"{g['delta_pct']:+.0f}%",
+            "Grade":       g["grade"],
+            "Verdict":     g["label"],
+        })
+
+    if grade_rows:
+        grade_df = pd.DataFrame(grade_rows)
+        st.dataframe(grade_df, hide_index=True, use_container_width=True)
+
+        # Summary bar
+        grade_counts = grade_df["Grade"].value_counts().to_dict()
+        summary_parts = [f"{g}: {n}" for g, n in sorted(grade_counts.items())]
+        st.caption("Grade distribution: " + " | ".join(summary_parts))
+    else:
+        st.info("No transfer fee data available for this squad.")

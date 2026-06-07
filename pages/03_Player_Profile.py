@@ -20,7 +20,10 @@ if _CSS.exists():
 from config.settings import TOP_5_LEAGUES
 from data.fetchers.squad import get_clubs_for_league, get_enriched_squad
 from data.scrapers.ea_ratings import search_player_ea
-from data.scrapers.understat import search_player_understat, get_player_xg_timeline, get_player_shots, get_player_understat_url
+from data.scrapers.understat import (
+    search_player_understat, get_player_xg_timeline,
+    get_player_shots, get_player_understat_url, get_player_season_summary,
+)
 from data.scrapers.fbref import get_player_stats, get_player_percentiles, get_league_stats
 from models.price_predictor import predict_transfer_fee
 from models.squad_analyzer import fit_analysis
@@ -164,6 +167,7 @@ tab_stats, tab_shots, tab_xg, tab_value, tab_price, tab_fit = st.tabs([
 ])
 
 season = "2024-2025"
+us_season = "2025"  # Understat season key: "2025" = 2025/26, "2024" = 2024/25
 
 # ── Tab: Radar ───────────────────────────────────────────────────────────────
 with tab_stats:
@@ -228,9 +232,9 @@ with tab_shots:
     st.subheader("Shot Map")
 
     @st.cache_data(ttl=86400, show_spinner=False)
-    def load_understat_id(pname, lg_name):
+    def load_understat_id(pname, lg_name, szn):
         try:
-            result = search_player_understat(pname, lg_name, "2024")
+            result = search_player_understat(pname, lg_name, szn)
             return result.get("id") if result else None
         except Exception:
             return None
@@ -242,26 +246,59 @@ with tab_shots:
         except Exception:
             return None
 
+    @st.cache_data(ttl=86400, show_spinner=False)
+    def load_season_summary(pid):
+        try:
+            return get_player_season_summary(pid)
+        except Exception:
+            return []
+
     understat_league = TOP_5_LEAGUES.get(league, {}).get("understat_name", "EPL")
     with st.spinner("Loading shot data…"):
-        us_id = load_understat_id(name, understat_league)
-        shots = load_shots(us_id, "2024") if us_id else None
+        us_id = load_understat_id(name, understat_league, us_season)
+        shots = load_shots(us_id, us_season) if us_id else None
+        season_summary = load_season_summary(us_id) if us_id else []
 
+    # ── Season stats table ───────────────────────────────────────────────────
+    if season_summary:
+        import pandas as _pd_shots
+        df_ss = _pd_shots.DataFrame(season_summary)
+        df_ss = df_ss.rename(columns={
+            "season": "Season", "team": "Club", "apps": "Apps",
+            "minutes": "Mins", "goals": "G", "assists": "A",
+            "shots": "Sh", "xG": "xG", "xA": "xA",
+            "xG90": "xG/90", "xA90": "xA/90",
+        })
+        st.markdown("**Season Summary**")
+        st.dataframe(
+            df_ss, hide_index=True, use_container_width=True,
+            column_config={
+                "xG":    st.column_config.NumberColumn(format="%.2f"),
+                "xA":    st.column_config.NumberColumn(format="%.2f"),
+                "xG/90": st.column_config.NumberColumn(format="%.2f"),
+                "xA/90": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+        st.markdown("---")
+
+    # ── Shot map ─────────────────────────────────────────────────────────────
     if shots:
         try:
             fig = build_shot_map(shots, name)
             if fig:
                 st.pyplot(fig)
+            goals_cnt = sum(1 for s in shots if s.get("result", "").lower() == "goal")
+            total_xg  = sum(s.get("xg", 0) for s in shots)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Shots", len(shots))
+            c2.metric("Goals", goals_cnt)
+            c3.metric("xG", f"{total_xg:.2f}")
         except Exception as e:
             st.warning(f"Shot map error: {e}")
     elif us_id:
-        # Fallback: embed Understat iframe
-        import streamlit.components.v1 as _comp_shots
-        us_url = get_player_understat_url(us_id)
-        st.caption(f"Source: [understat.com]({us_url})")
-        _comp_shots.iframe(us_url, height=620, scrolling=True)
+        st.info("No shots recorded for this player in the current season.")
     else:
-        st.info("Shot data not available — player not found on Understat for this league/season.")
+        st.info("Player not found on Understat for this league/season.")
 
 # ── Tab: xG Timeline ─────────────────────────────────────────────────────────
 with tab_xg:
@@ -275,13 +312,84 @@ with tab_xg:
             return None
 
     with st.spinner("Loading xG timeline…"):
-        xg_data = load_xg(us_id, "2024")
+        xg_data = load_xg(us_id, us_season)
 
     if xg_data:
         try:
             fig = build_xg_timeline(xg_data, name)
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
+
+            # Key metrics row
+            import pandas as _pd_xg
+            df_xg = _pd_xg.DataFrame(xg_data)
+            total_goals = int(df_xg["goals"].sum())
+            total_xg_v  = float(df_xg["xg"].sum())
+            total_ast   = int(df_xg["assists"].sum())
+            xg_diff     = total_goals - total_xg_v
+            diff_label  = f"+{xg_diff:.2f}" if xg_diff >= 0 else f"{xg_diff:.2f}"
+            diff_color  = "#3ddc84" if xg_diff >= 0 else "#ff5555"
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Games", len(xg_data))
+            c2.metric("Goals", total_goals)
+            c3.metric("xG", f"{total_xg_v:.2f}")
+            c4.metric("G − xG", diff_label, delta_color="normal")
+
+            # Per-match detail table
+            with st.expander("Per-match breakdown"):
+                df_display = df_xg[["date", "home_team", "away_team", "xg", "goals", "assists", "time_played"]].copy()
+                df_display.columns = ["Date", "Home", "Away", "xG", "G", "A", "Mins"]
+                df_display["Date"] = df_display["Date"].str[:10]
+                st.dataframe(df_display, hide_index=True, use_container_width=True,
+                             column_config={"xG": st.column_config.NumberColumn(format="%.2f")})
+
+            # ── Rolling 5-game form tracker ───────────────────────────────────
+            st.markdown("---")
+            st.subheader("🔥 Last 5 Games — Form Tracker")
+            last5 = xg_data[-5:]
+            if len(last5) >= 1:
+                l5_goals = sum(m["goals"] for m in last5)
+                l5_xg    = sum(m["xg"] for m in last5)
+                l5_ast   = sum(m.get("assists", 0) for m in last5)
+                avg_xg5  = l5_xg / len(last5)
+                season_avg_xg = total_xg_v / len(xg_data) if xg_data else 0
+
+                # Form indicator
+                if avg_xg5 >= season_avg_xg * 1.25:
+                    form_icon, form_label, form_color = "🔥", "Hot Form", "#3ddc84"
+                elif avg_xg5 >= season_avg_xg * 0.75:
+                    form_icon, form_label, form_color = "📈", "Steady",   "#c9a84c"
+                else:
+                    form_icon, form_label, form_color = "❄️", "Cold Spell","#5dade2"
+
+                st.markdown(
+                    f"<div style='background:#111e2e;border:1px solid #2a4560;border-radius:10px;"
+                    f"padding:14px 20px;display:flex;align-items:center;gap:16px;'>"
+                    f"<span style='font-size:2.4rem;'>{form_icon}</span>"
+                    f"<div><div style='font-size:1.2rem;font-weight:700;color:{form_color};'>{form_label}</div>"
+                    f"<div style='color:#8899aa;font-size:.85rem;'>Last {len(last5)} games: "
+                    f"{l5_goals}G / {l5_ast}A / {l5_xg:.2f} xG (avg {avg_xg5:.2f}/game)</div></div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+                # Mini table
+                l5_rows = []
+                for m in reversed(last5):
+                    opp = m.get("away_team") if m.get("home_team") else m.get("home_team")
+                    l5_rows.append({
+                        "Date": m["date"][:10],
+                        "Opponent": opp or "—",
+                        "G": m["goals"],
+                        "A": m.get("assists", 0),
+                        "xG": round(m["xg"], 2),
+                        "Mins": m.get("time_played", "—"),
+                    })
+                import pandas as _pd_form
+                st.dataframe(_pd_form.DataFrame(l5_rows), hide_index=True, use_container_width=True,
+                             column_config={"xG": st.column_config.NumberColumn(format="%.2f")})
+
         except Exception as e:
             st.warning(f"xG timeline error: {e}")
     else:
@@ -394,3 +502,24 @@ with tab_fit:
                 st.error(f"Fit analysis error: {e}")
         else:
             st.warning("Could not load target squad data.")
+
+# ── PDF Export ───────────────────────────────────────────────────────────────
+st.markdown("---")
+st.subheader("📄 Download Scout Report")
+
+if st.button("Generate PDF Scout Report"):
+    from ui.export.pdf_report import generate_scout_report_pdf
+    with st.spinner("Building PDF…"):
+        _fbref = st.session_state.get("_fbref_stats_cache")
+        _fit   = st.session_state.get("_fit_result_cache")
+        pdf_bytes = generate_scout_report_pdf(player, fit_result=_fit, fbref_stats=_fbref)
+    if pdf_bytes:
+        pname = player.get("name", "player").replace(" ", "_")
+        st.download_button(
+            label="⬇️ Download Scout Report PDF",
+            data=pdf_bytes,
+            file_name=f"scout_report_{pname}.pdf",
+            mime="application/pdf",
+        )
+    else:
+        st.warning("PDF generation requires `reportlab`. Install with: `pip install reportlab`")
