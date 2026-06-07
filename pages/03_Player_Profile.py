@@ -294,11 +294,19 @@ with tab_shots:
             c2.metric("Goals", goals_cnt)
             c3.metric("xG", f"{total_xg:.2f}")
         except Exception as e:
-            st.warning(f"Shot map error: {e}")
+            st.warning(f"Shot map render error: {e}")
     elif us_id:
-        st.info("No shots recorded for this player in the current season.")
+        st.info(f"No shots found for **{name}** (Understat ID: {us_id}) in season {us_season}. "
+                "They may play in a position with few shots or the season data is incomplete.")
     else:
-        st.info("Player not found on Understat for this league/season.")
+        st.warning(
+            f"**{name}** was not found on Understat for **{understat_league}** (season {us_season}).\n\n"
+            "This can happen if:\n"
+            "- The player's name differs between Transfermarkt and Understat\n"
+            "- The player moved from a non-Understat league (e.g. Saudi Pro League)\n"
+            "- Understat's server is temporarily blocking requests\n\n"
+            "Try again in a moment, or browse a different player."
+        )
 
 # ── Tab: xG Timeline ─────────────────────────────────────────────────────────
 with tab_xg:
@@ -393,7 +401,13 @@ with tab_xg:
         except Exception as e:
             st.warning(f"xG timeline error: {e}")
     else:
-        st.info("xG data not available for this player.")
+        if us_id:
+            st.info(f"No xG match data found for **{name}** (ID: {us_id}) in season {us_season}.")
+        else:
+            st.warning(
+                f"**{name}** could not be matched on Understat for **{understat_league}**.\n\n"
+                "xG data requires an Understat match. Check the Shot Map tab for details."
+            )
 
 # ── Tab: Market Value ─────────────────────────────────────────────────────────
 with tab_value:

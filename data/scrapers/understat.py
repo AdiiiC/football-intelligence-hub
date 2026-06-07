@@ -97,7 +97,7 @@ _XHR_HEADERS = {
 }
 
 
-def _get_player_data(player_id: str) -> Optional[dict]:
+def _get_player_data(player_id: str, retries: int = 3) -> Optional[dict]:
     """
     Fetch player data (shots, matches, groups) from Understat via GET.
     Must visit the player page first to obtain a PHPSESSID cookie,
@@ -109,29 +109,37 @@ def _get_player_data(player_id: str) -> Optional[dict]:
         return cached
 
     page_url = f"{BASE_URL}/player/{player_id}"
-    page_resp = SESSION.get(page_url, timeout=15)
-    if page_resp.status_code != 200:
-        return None
+    for attempt in range(retries):
+        try:
+            SESSION.headers.update(get_scraper_headers())
+            page_resp = SESSION.get(page_url, timeout=20)
+            if page_resp.status_code == 429:
+                time.sleep(30 + random.uniform(0, 10))
+                continue
+            if page_resp.status_code != 200:
+                time.sleep(2 ** attempt + random.uniform(0, 2))
+                continue
 
-    data_resp = SESSION.get(
-        f"{BASE_URL}/getPlayerData/{player_id}",
-        headers={
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": page_url,
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-        },
-        timeout=20,
-    )
-    if data_resp.status_code != 200:
-        return None
+            SESSION.headers.update(get_scraper_headers())
+            data_resp = SESSION.get(
+                f"{BASE_URL}/getPlayerData/{player_id}",
+                headers={
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Referer": page_url,
+                    "Accept": "application/json, text/javascript, */*; q=0.01",
+                },
+                timeout=25,
+            )
+            if data_resp.status_code != 200:
+                time.sleep(2 ** attempt + random.uniform(0, 2))
+                continue
 
-    try:
-        data = data_resp.json()
-    except Exception:
-        return None
-
-    _save_cache(cache_key, data)
-    return data
+            data = data_resp.json()
+            _save_cache(cache_key, data)
+            return data
+        except Exception:
+            time.sleep(2 ** attempt + random.uniform(0, 2))
+    return None
 
 
 def get_player_shots(player_id: str, season: str = "2024") -> list[dict]:
@@ -144,58 +152,82 @@ def get_player_shots(player_id: str, season: str = "2024") -> list[dict]:
         return []
 
     raw_shots = data.get("shots", [])
-    result = []
-    for s in raw_shots:
-        if season and str(s.get("season", "")) != str(season):
-            continue
-        try:
-            result.append({
-                "id": s.get("id", ""),
-                "minute": int(s.get("minute", 0)),
-                "result": s.get("result", ""),
-                "x": float(s.get("X", 0)) * 100,   # scale 0-1 → 0-100
-                "y": float(s.get("Y", 0)) * 100,
-                "xg": float(s.get("xG", 0)),
-                "situation": s.get("situation", ""),
-                "season": s.get("season", ""),
-                "shot_type": s.get("shotType", ""),
-                "date": s.get("date", ""),
-                "player_assisted": s.get("player_assisted", ""),
-                "last_action": s.get("lastAction", ""),
-            })
-        except Exception:
-            continue
+
+    # Try requested season; if empty fall back to most recent season in the data
+    def _parse_shots(shots_raw, szn):
+        out = []
+        for s in shots_raw:
+            if szn and str(s.get("season", "")) != str(szn):
+                continue
+            try:
+                out.append({
+                    "id": s.get("id", ""),
+                    "minute": int(s.get("minute", 0)),
+                    "result": s.get("result", ""),
+                    "x": float(s.get("X", 0)) * 100,
+                    "y": float(s.get("Y", 0)) * 100,
+                    "xg": float(s.get("xG", 0)),
+                    "situation": s.get("situation", ""),
+                    "season": s.get("season", ""),
+                    "shot_type": s.get("shotType", ""),
+                    "date": s.get("date", ""),
+                    "player_assisted": s.get("player_assisted", ""),
+                    "last_action": s.get("lastAction", ""),
+                })
+            except Exception:
+                continue
+        return out
+
+    result = _parse_shots(raw_shots, season)
+    if not result and raw_shots:
+        # Fall back to the most recent season present in the data
+        available = sorted({str(s.get("season", "")) for s in raw_shots if s.get("season")}, reverse=True)
+        for alt_szn in available:
+            result = _parse_shots(raw_shots, alt_szn)
+            if result:
+                break
     return result
 
 
 def get_player_xg_timeline(player_id: str, season: str = "2024") -> list[dict]:
     """
     Return per-match xG/xA timeline for a player in a season.
+    Falls back to the most recent available season if requested season is empty.
     """
     data = _get_player_data(player_id)
     if not data:
         return []
 
-    timeline = []
-    for m in data.get("matches", []):
-        if str(m.get("season", "")) != str(season):
-            continue
-        try:
-            timeline.append({
-                "date": m.get("date", ""),
-                "home_team": m.get("h_team", ""),
-                "away_team": m.get("a_team", ""),
-                "xg": float(m.get("xG", 0)),
-                "xga": float(m.get("xGChain", 0)),
-                "goals": int(m.get("goals", 0)),
-                "assists": int(m.get("assists", 0)),
-                "time_played": int(m.get("time", 0)),
-                "position": m.get("position", ""),
-            })
-        except Exception:
-            continue
+    def _parse_timeline(matches_raw, szn):
+        out = []
+        for m in matches_raw:
+            if str(m.get("season", "")) != str(szn):
+                continue
+            try:
+                out.append({
+                    "date": m.get("date", ""),
+                    "home_team": m.get("h_team", ""),
+                    "away_team": m.get("a_team", ""),
+                    "xg": float(m.get("xG", 0)),
+                    "xga": float(m.get("xGChain", 0)),
+                    "goals": int(m.get("goals", 0)),
+                    "assists": int(m.get("assists", 0)),
+                    "time_played": int(m.get("time", 0)),
+                    "position": m.get("position", ""),
+                })
+            except Exception:
+                continue
+        out.sort(key=lambda x: x["date"])
+        return out
 
-    timeline.sort(key=lambda x: x["date"])
+    raw_matches = data.get("matches", [])
+    timeline = _parse_timeline(raw_matches, season)
+    if not timeline and raw_matches:
+        available = sorted({str(m.get("season", "")) for m in raw_matches if m.get("season")}, reverse=True)
+        for alt_szn in available:
+            timeline = _parse_timeline(raw_matches, alt_szn)
+            if timeline:
+                break
     return timeline
 
 
@@ -261,16 +293,28 @@ def search_player_understat(name: str, league: str = "EPL", season: str = "2025"
         cached = _load_cache(cache_key, 86400 * 7)
         if cached:
             return cached
-        try:
-            resp = SESSION.post(
-                f"{BASE_URL}/main/getPlayersStats/",
-                data={"league": league, "season": szn},
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                continue
-            players = resp.json().get("players", [])
-        except Exception:
+        for attempt in range(3):
+            try:
+                SESSION.headers.update(get_scraper_headers())
+                resp = SESSION.post(
+                    f"{BASE_URL}/main/getPlayersStats/",
+                    data={"league": league, "season": szn},
+                    headers={"X-Requested-With": "XMLHttpRequest",
+                             "Accept": "application/json, text/javascript, */*; q=0.01"},
+                    timeout=20,
+                )
+                if resp.status_code == 429:
+                    time.sleep(30 + random.uniform(0, 10))
+                    continue
+                if resp.status_code != 200:
+                    time.sleep(2 ** attempt + random.uniform(0, 2))
+                    continue
+                players = resp.json().get("players", [])
+                break
+            except Exception:
+                players = []
+                time.sleep(2 ** attempt + random.uniform(0, 2))
+        else:
             continue
 
         best = _best_match(players, name_norm)
