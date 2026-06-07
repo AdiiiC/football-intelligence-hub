@@ -65,7 +65,7 @@ with st.sidebar:
 
         @st.cache_data(ttl=86400, show_spinner=False)
         def load_squad(slug, tid, ln):
-            return get_enriched_squad(slug, tid, ln)
+            return get_enriched_squad(slug, tid, ln, club_display_name=club_name)
 
         with st.spinner(f"Loading {club_name}…"):
             squad = load_squad(club["tm_slug"], club["tm_id"], league)
@@ -92,6 +92,11 @@ if not player:
     st.stop()
 
 # ── Enrich with fresh EA attributes ─────────────────────────────────────────
+# We only take stats/attributes from EA — never club_name, league_name, or
+# club_logo_url, because the player might be on loan / recently transferred
+# and EA's club differs from the TM squad context.
+_EA_SKIP = {"club_name", "league_name", "club_logo_url"}
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def enrich_player(name, club):
     ea = search_player_ea(name, club)
@@ -99,7 +104,15 @@ def enrich_player(name, club):
 
 ea_data = enrich_player(player.get("name", ""), player.get("club_name", "") or club_name)
 if ea_data:
-    player = {**ea_data, **{k: v for k, v in player.items() if v is not None}}
+    # Merge: EA data as base, then overlay TM/squad data (non-None values win)
+    # But never take club_name/league_name from EA — use squad context instead.
+    _tm_club = player.get("club_name") or club_name  # preserve before merge
+    player = {
+        **{k: v for k, v in ea_data.items() if k not in _EA_SKIP},
+        **{k: v for k, v in player.items() if v is not None},
+    }
+    if _tm_club and not player.get("club_name"):
+        player["club_name"] = _tm_club
 
 # ── Hero section ─────────────────────────────────────────────────────────────
 import streamlit.components.v1 as _comp
@@ -481,7 +494,7 @@ with tab_fit:
 
             @st.cache_data(ttl=86400, show_spinner=False)
             def load_target_squad(slug, tid, ln):
-                return get_enriched_squad(slug, tid, ln)
+                return get_enriched_squad(slug, tid, ln, club_display_name=target_club_name)
 
             target_squad = load_target_squad(target_club["tm_slug"], target_club["tm_id"], target_league)
 

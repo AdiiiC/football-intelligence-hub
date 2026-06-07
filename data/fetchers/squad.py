@@ -59,7 +59,7 @@ def _position_group(pos_code: str) -> str:
     return "Other"
 
 
-def get_enriched_squad(club_slug: str, club_id: str, league_name: str) -> list[dict]:
+def get_enriched_squad(club_slug: str, club_id: str, league_name: str, club_display_name: str = "") -> list[dict]:
     """
     Returns enriched squad: Transfermarkt squad + EA FC attributes.
     Fast path — no FBref/Understat calls here (those are loaded per-player
@@ -68,6 +68,11 @@ def get_enriched_squad(club_slug: str, club_id: str, league_name: str) -> list[d
     cache_key = f"enriched_{club_id}"
     cached = _load_cache(cache_key, CACHE_TTL_SQUAD)
     if cached:
+        # Backfill club_name on cached results if missing
+        if club_display_name:
+            for p in cached:
+                if not p.get("club_name"):
+                    p["club_name"] = club_display_name
         return cached
 
     # 1. Base squad from Transfermarkt
@@ -247,6 +252,12 @@ def get_enriched_squad(club_slug: str, club_id: str, league_name: str) -> list[d
                         enriched_player[stat] = us_match[stat]
 
         enriched.append(enriched_player)
+
+    # Stamp the TM club name on every player so EA's club never overwrites context
+    if club_display_name:
+        for p in enriched:
+            if not p.get("club_name"):
+                p["club_name"] = club_display_name
 
     _save_cache(cache_key, enriched)
     return enriched

@@ -203,7 +203,7 @@ with st.sidebar:
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _squad(slug, tid, ln):
-    return get_enriched_squad(slug, tid, ln)
+    return get_enriched_squad(slug, tid, ln, club_display_name=club_name)
 
 with st.spinner(f"Loading {club_name}…"):
     squad = _squad(club["tm_slug"], club["tm_id"], league)
