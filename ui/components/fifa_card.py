@@ -161,14 +161,17 @@ def _initials_avatar(player: dict, size: str = "80px") -> str:
 def _build_image_html(player: dict, size: str = "80px") -> str:
     """
     Return player portrait with initials circle always as base layer.
-    The <img> sits on top; onerror hides it, revealing the initials.
+    The <img> sits on top; a chained onerror waterfall tries every CDN
+    before hiding the img and revealing the initials underneath.
+    Chain: sofifa → EA CDN → TM photo → hide (initials show through)
     """
-    url = (
-        player.get("sofifa_face_url") or   # ← 200 OK, use first
-        player.get("ea_avatar_url") or     # ← EA CDN 403s in most envs
-        player.get("photo_url") or         # ← TM photo fallback
-        ""
-    )
+    sofifa = player.get("sofifa_face_url", "") or ""
+    ea     = player.get("ea_avatar_url", "") or ""
+    tm     = player.get("photo_url", "") or ""
+
+    # Build safe JS-escaped URLs (single quotes safe inside onerror="...")
+    def _esc(u): return u.replace("'", "%27")
+
     name = player.get("name", "?")
     parts = name.split()
     initials = (parts[0][0] + parts[-1][0]).upper() if len(parts) >= 2 else name[:2].upper()
@@ -178,15 +181,33 @@ def _build_image_html(player: dict, size: str = "80px") -> str:
     sz = int(size.replace("px", ""))
     fs = sz // 3
 
-    # Always render initials as solid background; img layered on top
-    # overflow:hidden clips the absolute img to the border-radius circle
-    img_tag = (
-        f'<img src="{url}" '
-        f'style="position:absolute;inset:0;width:100%;height:100%;'
-        f'object-fit:cover;border-radius:50%;" '
-        f'onerror="this.style.display=\'none\'" />'
-        if url else ""
-    )
+    # Waterfall: sofifa → EA → TM → hide
+    first_url = sofifa or ea or tm
+    if first_url:
+        # Build the onerror chain for remaining fallbacks
+        fallbacks = [u for u in [sofifa, ea, tm] if u and u != first_url]
+        if len(fallbacks) >= 2:
+            onerror = (
+                f"this.src='{_esc(fallbacks[0])}';"
+                f"this.onerror=function(){{this.src='{_esc(fallbacks[1])}';"
+                f"this.onerror=function(){{this.style.display='none'}}}};"
+            )
+        elif len(fallbacks) == 1:
+            onerror = (
+                f"this.src='{_esc(fallbacks[0])}';"
+                f"this.onerror=function(){{this.style.display='none'}};"
+            )
+        else:
+            onerror = "this.style.display='none';"
+        img_tag = (
+            f'<img src="{first_url}" '
+            f'style="position:absolute;inset:0;width:100%;height:100%;'
+            f'object-fit:cover;border-radius:50%;" '
+            f'onerror="{onerror}" />'
+        )
+    else:
+        img_tag = ""
+
     return (
         f'<div style="position:relative;width:{size};height:{size};'
         f'border-radius:50%;background:{bg};border:2px solid {border_col};'
